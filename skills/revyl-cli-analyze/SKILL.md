@@ -5,6 +5,14 @@ description: Analyze failed Revyl test, workflow, and device-session reports via
 
 # Revyl CLI Failure Analysis Skill
 
+## Native Agent Behavior
+
+- Ask at most 1-3 concise clarification questions only when the target test, workflow, session, report URL, or sensitive action cannot be inferred from the repo or Revyl CLI.
+- Prefer safe defaults and keep moving when `revyl test list`, `revyl workflow list`, `revyl test report`, `revyl workflow report`, `revyl device report`, screenshots, or reports can answer the question.
+- When Revyl prints a report, viewer, or local app URL, open it in the native browser/tool surface when available: Codex Browser/in-app browser for local URLs, Revyl report/viewer URLs, screenshots, and page checks; Claude Code `.claude/skills` slash-command discovery plus WebFetch/WebSearch or configured MCP/browser tools; Cursor `.cursor/skills` plus `.cursor/rules/revyl-skills.mdc` and available MCP/browser tools.
+- If no browser tool is exposed, report the URL and verify through `revyl test report`, `revyl workflow report`, or `revyl device report` instead of claiming browser access.
+- Confirm before entering sensitive data, submitting forms, uploading files, accepting browser permissions, changing sharing/access, or deleting data.
+
 ## Quick Start
 
 ```bash

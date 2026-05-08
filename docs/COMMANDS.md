@@ -776,6 +776,7 @@ revyl skill install --name revyl-cli-auth-bypass-android --force # Native Androi
 revyl skill install --name revyl-cli-auth-bypass-flutter --force # Flutter leaf
 revyl skill install --cursor --force                 # Force Cursor if auto-detect is ambiguous
 revyl skill install --codex --force                  # Force Codex if auto-detect is ambiguous
+revyl skill install --claude --force                 # Force Claude Code if auto-detect is ambiguous
 revyl skill show --name revyl-cli-dev-loop           # Print a named skill to stdout
 revyl skill export --name revyl-cli-create -o FILE   # Export a named skill to a file
 make device-prod-smoke-ios    # Local iOS branch smoke against production device relay

@@ -59,6 +59,16 @@ revyl skill install --global --cursor --force
 | Claude Code | `.claude/skills/<skill-name>/SKILL.md` | `~/.claude/skills/<skill-name>/SKILL.md` |
 | Codex | `.codex/skills/<skill-name>/SKILL.md` | `~/.codex/skills/<skill-name>/SKILL.md` |
 
+### Native agent behavior
+
+The shipped skills include client-aware guidance so agents use the native surface they have:
+
+- Codex: use the Codex Browser/in-app browser when it is available for local URLs, Revyl viewer/report URLs, screenshots, and page checks.
+- Claude Code: rely on `.claude/skills` discovery and use WebFetch/WebSearch or configured MCP/browser tools when available.
+- Cursor: use `.cursor/skills` plus the project Cursor rule installed at `.cursor/rules/revyl-skills.mdc`; use Cursor MCP/browser tools only when exposed.
+
+When no browser tool is available, agents should report the URL and verify through `revyl device screenshot`, `revyl device report`, or `revyl test report` instead of pretending browser access exists. Project-level Cursor installs create the companion Cursor rule; `--global --cursor` only installs skills because Cursor user rules are settings-backed, not a stable file target.
+
 ### Refresh skills after CLI update
 
 ```bash

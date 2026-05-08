@@ -95,6 +95,7 @@ revyl skill install --name revyl-cli-auth-bypass-android --force # Native Androi
 revyl skill install --name revyl-cli-auth-bypass-flutter --force # Flutter leaf
 revyl skill install --cursor --force                   # Force Cursor if auto-detect is ambiguous
 revyl skill install --codex --force                    # Force Codex if auto-detect is ambiguous
+revyl skill install --claude --force                   # Force Claude Code if auto-detect is ambiguous
 revyl skill install --global --force                   # Install for all projects
 revyl skill show --name revyl-cli-dev-loop
 revyl skill export --name revyl-cli-create -o SKILL.md

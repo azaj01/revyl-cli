@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/revyl/cli/internal/skillcatalog"
+	"github.com/revyl/cli/internal/testutil"
 )
 
 func withSkillFamilyFlags(cli bool, mcp bool, fn func()) {
@@ -29,6 +30,22 @@ var authBypassLeafSkillNames = []string{
 	"revyl-cli-auth-bypass-flutter",
 }
 
+func defaultInstalledSkillNamesForTest() []string {
+	names := []string{"revyl-cli-dev-loop", "revyl-cli-create", "revyl-cli-auth-bypass"}
+	return append(names, authBypassLeafSkillNames...)
+}
+
+func assertInstalledSkills(t *testing.T, baseDir string, names []string) {
+	t.Helper()
+
+	for _, name := range names {
+		path := filepath.Join(baseDir, name, "SKILL.md")
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected %s to exist: %v", path, err)
+		}
+	}
+}
+
 func TestResolveInstallSkillsDefaultInstallsRecommendedBundle(t *testing.T) {
 	withSkillFamilyFlags(false, false, func() {
 		selected, err := resolveInstallSkills(nil)
@@ -39,8 +56,7 @@ func TestResolveInstallSkillsDefaultInstallsRecommendedBundle(t *testing.T) {
 		for _, sk := range selected {
 			got = append(got, sk.Name)
 		}
-		want := []string{"revyl-cli-dev-loop", "revyl-cli-create", "revyl-cli-auth-bypass"}
-		want = append(want, authBypassLeafSkillNames...)
+		want := defaultInstalledSkillNamesForTest()
 		if strings.Join(got, ",") != strings.Join(want, ",") {
 			t.Fatalf("default skills = %v, want %v", got, want)
 		}
@@ -178,7 +194,7 @@ func TestInstallSelectedAuthBypassLeafSkills(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveInstallSkills(names) error = %v", err)
 	}
-	if err := installSkillsToTargets([]string{target}, selected, true); err != nil {
+	if err := installSkillsToTargets([]skillInstallTarget{{tool: "codex", path: target}}, selected, true); err != nil {
 		t.Fatalf("installSkillsToTargets() error = %v", err)
 	}
 
@@ -195,6 +211,36 @@ func TestInstallSelectedAuthBypassLeafSkills(t *testing.T) {
 }
 
 func TestInstallPublicSkillsForToolsWritesDefaultSkills(t *testing.T) {
+	cases := []struct {
+		tool      string
+		skillsDir string
+	}{
+		{tool: "cursor", skillsDir: filepath.Join(".cursor", "skills")},
+		{tool: "claude", skillsDir: filepath.Join(".claude", "skills")},
+		{tool: "codex", skillsDir: filepath.Join(".codex", "skills")},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.tool, func(t *testing.T) {
+			workDir := t.TempDir()
+			withWorkingDir(t, workDir)
+
+			if err := installPublicSkillsForTools([]string{tc.tool}, false, true); err != nil {
+				t.Fatalf("installPublicSkillsForTools() error = %v", err)
+			}
+
+			target := filepath.Join(workDir, tc.skillsDir)
+			assertInstalledSkills(t, target, defaultInstalledSkillNamesForTest())
+
+			compatPath := filepath.Join(target, "revyl-cli-analyze", "SKILL.md")
+			if _, err := os.Stat(compatPath); !os.IsNotExist(err) {
+				t.Fatalf("expected compatibility skill not to be installed by default, stat err = %v", err)
+			}
+		})
+	}
+}
+
+func TestCursorProjectInstallWritesCompanionRule(t *testing.T) {
 	workDir := t.TempDir()
 	withWorkingDir(t, workDir)
 
@@ -202,18 +248,55 @@ func TestInstallPublicSkillsForToolsWritesDefaultSkills(t *testing.T) {
 		t.Fatalf("installPublicSkillsForTools() error = %v", err)
 	}
 
-	wantInstalled := []string{"revyl-cli-dev-loop", "revyl-cli-create", "revyl-cli-auth-bypass"}
-	wantInstalled = append(wantInstalled, authBypassLeafSkillNames...)
-	for _, name := range wantInstalled {
-		path := filepath.Join(workDir, ".cursor", "skills", name, "SKILL.md")
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("expected %s to exist: %v", path, err)
+	rulePath := filepath.Join(workDir, ".cursor", "rules", cursorRuleFileName)
+	data, err := os.ReadFile(rulePath)
+	if err != nil {
+		t.Fatalf("expected Cursor companion rule at %s: %v", rulePath, err)
+	}
+
+	rule := string(data)
+	for _, want := range []string{"alwaysApply: false", "revyl-cli-dev-loop", "revyl-cli-create", "revyl-cli-auth-bypass", "revyl device screenshot"} {
+		if !strings.Contains(rule, want) {
+			t.Fatalf("Cursor rule did not contain %q", want)
 		}
 	}
+}
 
-	compatPath := filepath.Join(workDir, ".cursor", "skills", "revyl-cli-analyze", "SKILL.md")
-	if _, err := os.Stat(compatPath); !os.IsNotExist(err) {
-		t.Fatalf("expected compatibility skill not to be installed by default, stat err = %v", err)
+func TestCursorGlobalInstallDoesNotWriteCompanionRule(t *testing.T) {
+	workDir := t.TempDir()
+	homeDir := t.TempDir()
+	withWorkingDir(t, workDir)
+	testutil.SetHomeDir(t, homeDir)
+
+	if err := installPublicSkillsForTools([]string{"cursor"}, true, true); err != nil {
+		t.Fatalf("installPublicSkillsForTools() error = %v", err)
 	}
 
+	assertInstalledSkills(t, filepath.Join(homeDir, ".cursor", "skills"), defaultInstalledSkillNamesForTest())
+
+	for _, rulePath := range []string{
+		filepath.Join(workDir, ".cursor", "rules", cursorRuleFileName),
+		filepath.Join(homeDir, ".cursor", "rules", cursorRuleFileName),
+	} {
+		if _, err := os.Stat(rulePath); !os.IsNotExist(err) {
+			t.Fatalf("expected no global Cursor companion rule at %s, stat err = %v", rulePath, err)
+		}
+	}
+}
+
+func TestDefaultInstalledSkillContentIncludesNativeAgentBehavior(t *testing.T) {
+	withSkillFamilyFlags(false, false, func() {
+		selected, err := resolveInstallSkills(nil)
+		if err != nil {
+			t.Fatalf("resolveInstallSkills(nil) error = %v", err)
+		}
+
+		for _, sk := range selected {
+			for _, want := range []string{"Native Agent Behavior", "open it in the native browser", "Codex Browser", "Claude Code `.claude/skills`", "Cursor `.cursor/skills`", "revyl device screenshot"} {
+				if !strings.Contains(sk.Content, want) {
+					t.Fatalf("%s content did not contain %q", sk.Name, want)
+				}
+			}
+		}
+	})
 }

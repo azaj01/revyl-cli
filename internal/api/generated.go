@@ -300,6 +300,7 @@ const (
 	StepTypeScrollDown     StepType = "scroll_down"
 	StepTypeScrollUp       StepType = "scroll_up"
 	StepTypeSelect         StepType = "select"
+	StepTypeSetAppearance  StepType = "set_appearance"
 	StepTypeSetLocation    StepType = "set_location"
 	StepTypeSetOrientation StepType = "set_orientation"
 	StepTypeSwipe          StepType = "swipe"
@@ -2037,7 +2038,7 @@ type CompiledIntentStep struct {
 	// Confidence Model confidence 0-1 if available
 	Confidence *float32 `json:"confidence"`
 
-	// ManualSubtype For manual steps: go_home, open_app, kill_app, back, set_location, set_orientation, wait, navigate
+	// ManualSubtype For manual steps: go_home, open_app, kill_app, back, set_location, set_orientation, set_appearance, wait, navigate
 	ManualSubtype *string `json:"manual_subtype"`
 
 	// SourceActionRanges Which raw actions this step covers

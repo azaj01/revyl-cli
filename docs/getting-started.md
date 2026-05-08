@@ -44,6 +44,8 @@ you use and installs the recommended skills for that tool automatically:
 - **Claude Code** installs to `.claude/skills`
 - **Skip for now** leaves setup for later
 
+Project-level Cursor setup also installs `.cursor/rules/revyl-skills.mdc` so Cursor can route Revyl requests to the right skill. Codex and Claude Code use their native skill directories without mutating config files.
+
 If you skipped that prompt or want to refresh skills after a CLI update, install
 the recommended skill bundle:
 

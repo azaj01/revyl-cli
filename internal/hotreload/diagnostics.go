@@ -877,6 +877,15 @@ func requestExpoBundleFirstByte(
 				Detail: fmt.Sprintf("bundle_body_first_byte platform=%s timeout=%s ttfb=%s first_byte=%s path=%s error=%s", platform, timeout, ttfb, firstByteAt, bundleRequestPath(currentURL), readErr),
 			}
 		}
+		if firstByteAt > timeout {
+			_ = resp.Body.Close()
+			cancel()
+			return DiagnosticCheck{
+				Name:   "Bundle prewarm",
+				Passed: false,
+				Detail: fmt.Sprintf("bundle_body_first_byte platform=%s timeout=%s ttfb=%s first_byte=%s path=%s error=deadline exceeded before first body byte", platform, timeout, ttfb, firstByteAt, bundleRequestPath(currentURL)),
+			}
+		}
 
 		go drainExpoBundleBody(resp.Body, cancel)
 		return DiagnosticCheck{

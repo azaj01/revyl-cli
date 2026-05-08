@@ -26,6 +26,14 @@ var skillDirectories = map[string][]string{
 	"codex":  {".codex/skills", "~/.codex/skills"},
 }
 
+var supportedSkillTools = []string{"cursor", "claude", "codex"}
+
+type skillInstallTarget struct {
+	tool   string
+	path   string
+	global bool
+}
+
 var legacySkillNames = []string{
 	"revyl-device",
 	"revyl-dev-loop",
@@ -38,7 +46,30 @@ var legacySkillNames = []string{
 const (
 	skillFamilyCLIPrefix = "revyl-cli"
 	skillFamilyMCPPrefix = "revyl-mcp"
+	cursorRuleFileName   = "revyl-skills.mdc"
 )
+
+const cursorRuleContent = `---
+description: Use Revyl CLI agent skills for mobile dev loops, test authoring, failure analysis, and auth bypass.
+globs:
+alwaysApply: false
+---
+
+# Revyl Agent Skills
+
+Use this rule when the user asks Cursor to work with Revyl, mobile cloud devices, revyl dev, Revyl test creation, Revyl run analysis, or test-only auth bypass.
+
+Load the matching installed skill from .cursor/skills:
+
+- revyl-cli-dev-loop for starting or attaching to a Revyl dev loop, interacting with the cloud device, and verifying app behavior.
+- revyl-cli-create for authoring or refining stable Revyl YAML tests from app source, reports, or successful exploratory sessions.
+- revyl-cli-auth-bypass for setting up test-only authenticated app state across mobile stacks.
+- revyl-cli-analyze for failed run, workflow, or device-session triage when installed by name.
+
+Ask at most 1-3 concise clarification questions only when the repo and Revyl CLI cannot identify the target app, platform, session, URL, or sensitive action. Prefer revyl init --detect, revyl dev list, revyl app list, screenshots, and reports before asking.
+
+When Revyl prints a viewer, editor, report, or local app URL, open it with Cursor MCP/browser tools when Cursor exposes them. If no browser tool is available, report the URL and verify through revyl device screenshot or revyl device report instead of claiming browser access.
+`
 
 // skillCmd is the parent command for agent skill management.
 var skillCmd = &cobra.Command{
@@ -59,6 +90,7 @@ EXAMPLES:
   revyl skill install --force
   revyl skill install --cursor --force
   revyl skill install --codex --force
+  revyl skill install --claude --force
   revyl skill show --name revyl-cli-dev-loop
   revyl skill install --name revyl-cli-auth-bypass --force
   revyl skill export --name revyl-cli-create -o SKILL.md`,
@@ -135,6 +167,7 @@ EXAMPLES:
   revyl skill install --global --force
   revyl skill install --cursor --force
   revyl skill install --codex --force
+  revyl skill install --claude --force
   revyl skill install --name revyl-cli-dev-loop --cursor --force
   revyl skill install --name revyl-cli-create --codex --force
   revyl skill install --name revyl-cli-auth-bypass --force`,
@@ -181,6 +214,7 @@ func runSkillList(cmd *cobra.Command, args []string) error {
 	fmt.Println("Use a tool flag only when you need a specific target:")
 	fmt.Println("  revyl skill install --cursor --force")
 	fmt.Println("  revyl skill install --codex --force")
+	fmt.Println("  revyl skill install --claude --force")
 	return nil
 }
 
@@ -252,18 +286,21 @@ func installPublicSkillsForTools(tools []string, global bool, force bool) error 
 	return installSkillsToTargets(targets, skillcatalog.DefaultInstall(), force)
 }
 
-func installSkillsToTargets(targets []string, allSkills []skillcatalog.Skill, force bool) error {
+func installSkillsToTargets(targets []skillInstallTarget, allSkills []skillcatalog.Skill, force bool) error {
 	var installed []string
 	var skipped []string
+	var companionInstalled []string
+	var companionSkipped []string
 	var installErrors []string
 	var pruned []string
 	var pruneErrors []string
+	installCompanionRule := includesCLISkill(allSkills)
 
 	for _, target := range targets {
 		for _, sk := range allSkills {
-			path, wrote, err := installSkillTo(target, sk, force)
+			path, wrote, err := installSkillTo(target.path, sk, force)
 			if err != nil {
-				installErrors = append(installErrors, fmt.Sprintf("%s (%s): %v", target, sk.Name, err))
+				installErrors = append(installErrors, fmt.Sprintf("%s (%s): %v", target.path, sk.Name, err))
 				continue
 			}
 			if wrote {
@@ -273,7 +310,20 @@ func installSkillsToTargets(targets []string, allSkills []skillcatalog.Skill, fo
 			}
 		}
 
-		removed, errs := pruneLegacySkillDirs(target, allSkills)
+		if installCompanionRule {
+			rulePath, ruleWrote, err := installCursorCompanionRule(target, force)
+			if err != nil {
+				installErrors = append(installErrors, fmt.Sprintf("%s (cursor rule): %v", target.path, err))
+			} else if rulePath != "" {
+				if ruleWrote {
+					companionInstalled = append(companionInstalled, rulePath)
+				} else {
+					companionSkipped = append(companionSkipped, rulePath)
+				}
+			}
+		}
+
+		removed, errs := pruneLegacySkillDirs(target.path, allSkills)
 		pruned = append(pruned, removed...)
 		pruneErrors = append(pruneErrors, errs...)
 	}
@@ -282,6 +332,22 @@ func installSkillsToTargets(targets []string, allSkills []skillcatalog.Skill, fo
 		ui.Println()
 		ui.PrintSuccess("Installed Revyl skills:")
 		for _, path := range installed {
+			ui.PrintDim("  %s", path)
+		}
+	}
+
+	if len(companionInstalled) > 0 {
+		ui.Println()
+		ui.PrintSuccess("Installed Revyl companion files:")
+		for _, path := range companionInstalled {
+			ui.PrintDim("  %s", path)
+		}
+	}
+
+	if len(companionSkipped) > 0 {
+		ui.Println()
+		ui.PrintInfo("Already installed companion files (use --force to overwrite):")
+		for _, path := range companionSkipped {
 			ui.PrintDim("  %s", path)
 		}
 	}
@@ -318,7 +384,7 @@ func installSkillsToTargets(targets []string, allSkills []skillcatalog.Skill, fo
 		}
 	}
 
-	if len(installed) == 0 && len(skipped) == 0 {
+	if len(installed) == 0 && len(skipped) == 0 && len(companionInstalled) == 0 && len(companionSkipped) == 0 {
 		return fmt.Errorf("all installations failed")
 	}
 
@@ -368,6 +434,15 @@ func resolveInstallSkills(selectedNames []string) ([]skillcatalog.Skill, error) 
 		return nil, fmt.Errorf("no valid skill names provided. Available skills: %s", available)
 	}
 	return resolved, nil
+}
+
+func includesCLISkill(allSkills []skillcatalog.Skill) bool {
+	for _, sk := range allSkills {
+		if strings.HasPrefix(sk.Name, skillFamilyCLIPrefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveInstallSkillsByFamily(includeCLI bool, includeMCP bool) ([]skillcatalog.Skill, error) {
@@ -476,7 +551,7 @@ func pruneLegacySkillDirs(baseDir string, selected []skillcatalog.Skill) ([]stri
 
 // resolveInstallTargets determines which directories to install the skills to
 // based on the provided flags and auto-detection.
-func resolveInstallTargets() []string {
+func resolveInstallTargets() []skillInstallTarget {
 	// If explicit tool flags are set, use those
 	explicitTools := make([]string, 0)
 	if skillInstallCursor {
@@ -495,7 +570,8 @@ func resolveInstallTargets() []string {
 
 	// Auto-detect: check which tool directories exist
 	detected := make([]string, 0)
-	for toolName, dirs := range skillDirectories {
+	for _, toolName := range supportedSkillTools {
+		dirs := skillDirectories[toolName]
 		for _, dir := range dirs {
 			expanded := expandHome(dir)
 			if _, err := os.Stat(expanded); err == nil {
@@ -514,12 +590,12 @@ func resolveInstallTargets() []string {
 
 // resolveDirectories maps tool names to their target install directories,
 // respecting the --global flag.
-func resolveDirectories(tools []string) []string {
+func resolveDirectories(tools []string) []skillInstallTarget {
 	return resolveDirectoriesForScope(tools, skillInstallGlobal)
 }
 
-func resolveDirectoriesForScope(tools []string, global bool) []string {
-	paths := make([]string, 0, len(tools))
+func resolveDirectoriesForScope(tools []string, global bool) []skillInstallTarget {
+	targets := make([]skillInstallTarget, 0, len(tools))
 
 	for _, toolName := range tools {
 		dirs, ok := skillDirectories[toolName]
@@ -534,11 +610,15 @@ func resolveDirectoriesForScope(tools []string, global bool) []string {
 		}
 
 		if idx < len(dirs) {
-			paths = append(paths, expandHome(dirs[idx]))
+			targets = append(targets, skillInstallTarget{
+				tool:   toolName,
+				path:   expandHome(dirs[idx]),
+				global: global,
+			})
 		}
 	}
 
-	return paths
+	return targets
 }
 
 // installSkillTo writes the selected SKILL.md file to the given base skill directory.
@@ -564,6 +644,34 @@ func installSkillTo(baseDir string, selected skillcatalog.Skill, force bool) (st
 	}
 
 	return skillPath, true, nil
+}
+
+func installCursorCompanionRule(target skillInstallTarget, force bool) (string, bool, error) {
+	if target.tool != "cursor" || target.global {
+		return "", false, nil
+	}
+
+	cursorDir := filepath.Dir(target.path)
+	ruleDir := filepath.Join(cursorDir, "rules")
+	rulePath := filepath.Join(ruleDir, cursorRuleFileName)
+
+	if !force {
+		if _, err := os.Stat(rulePath); err == nil {
+			return rulePath, false, nil
+		} else if !os.IsNotExist(err) {
+			return rulePath, false, fmt.Errorf("failed to check existing Cursor rule: %w", err)
+		}
+	}
+
+	if err := os.MkdirAll(ruleDir, 0755); err != nil {
+		return rulePath, false, fmt.Errorf("failed to create directory %s: %w", ruleDir, err)
+	}
+
+	if err := os.WriteFile(rulePath, []byte(cursorRuleContent), 0644); err != nil {
+		return rulePath, false, fmt.Errorf("failed to write %s: %w", rulePath, err)
+	}
+
+	return rulePath, true, nil
 }
 
 // expandHome replaces a leading ~ with the user's home directory.

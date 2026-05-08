@@ -936,17 +936,17 @@ func wizardAgentSkillsSetup() (string, bool) {
 		{
 			Label:       "Cursor",
 			Value:       "cursor",
-			Description: "Install Revyl dev-loop and test-creation skills into .cursor/skills",
+			Description: "Install recommended Revyl skills into .cursor/skills and .cursor/rules",
 		},
 		{
 			Label:       "Codex",
 			Value:       "codex",
-			Description: "Install Revyl dev-loop and test-creation skills into .codex/skills",
+			Description: "Install recommended Revyl skills into .codex/skills",
 		},
 		{
 			Label:       "Claude Code",
 			Value:       "claude",
-			Description: "Install Revyl dev-loop and test-creation skills into .claude/skills",
+			Description: "Install recommended Revyl skills into .claude/skills",
 		},
 		{
 			Label:       "Skip for now",
@@ -958,12 +958,12 @@ func wizardAgentSkillsSetup() (string, bool) {
 	_, selected, err := ui.Select("Which AI coding tool should Revyl set up?", options, 0)
 	if err != nil {
 		ui.PrintDim("Skipped agent skill setup")
-		ui.PrintDim("Run later: revyl skill install --cursor --force")
+		ui.PrintDim("Run later: revyl skill install --force")
 		return "skipped", false
 	}
 	if selected == "skip" {
 		ui.PrintDim("Skipped agent skill setup")
-		ui.PrintDim("Run later: revyl skill install --cursor --force")
+		ui.PrintDim("Run later: revyl skill install --force")
 		return "skipped", false
 	}
 

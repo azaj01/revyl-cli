@@ -7,6 +7,14 @@ description: Generic CLI-first Revyl dev loop for hot reload, rebuild-loop, and 
 
 Use this skill when the user wants the generic Revyl CLI dev loop instead of MCP tool-by-tool orchestration. Start from the app's real stack, keep the session running, and use the device as the source of truth.
 
+## Native Agent Behavior
+
+- Ask at most 1-3 concise clarification questions only when the target app, platform, session, URL, or sensitive action cannot be inferred from the repo or Revyl CLI.
+- Prefer safe defaults and keep moving when `revyl init --detect`, `revyl dev list`, `revyl app list`, screenshots, or reports can answer the question.
+- When Revyl prints a viewer or local app URL, open it in the native browser/tool surface when available: Codex Browser/in-app browser for local URLs, Revyl viewer URLs, screenshots, and page checks; Claude Code `.claude/skills` slash-command discovery plus WebFetch/WebSearch or configured MCP/browser tools; Cursor `.cursor/skills` plus `.cursor/rules/revyl-skills.mdc` and available MCP/browser tools.
+- If no browser tool is exposed, report the URL and verify through `revyl device screenshot` or `revyl device report` instead of claiming browser access.
+- Confirm before entering sensitive data, submitting forms, uploading files, accepting browser permissions, changing sharing/access, or deleting data.
+
 ## Detect and Start
 
 ```bash
