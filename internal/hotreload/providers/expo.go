@@ -54,6 +54,12 @@ type ExpoDevServer struct {
 	// cancel is the context cancel function for stopping the server.
 	cancel context.CancelFunc
 
+	// processDone receives the result of the single cmd.Wait goroutine.
+	processDone chan error
+
+	// stopping suppresses failure reports for intentional shutdown.
+	stopping bool
+
 	// mu protects concurrent access to the server state.
 	mu sync.Mutex
 
@@ -65,6 +71,9 @@ type ExpoDevServer struct {
 
 	// debugMode enables watch-friendly Expo startup behavior for local debugging.
 	debugMode bool
+
+	// failureCh reports asynchronous runtime failures after startup.
+	failureCh chan hotreload.RuntimeFailure
 }
 
 // NewExpoDevServer creates a new Expo development server instance.
@@ -86,6 +95,7 @@ func NewExpoDevServer(workDir, appScheme string, port int, useExpPrefix bool) *E
 		AppScheme:    appScheme,
 		UseExpPrefix: useExpPrefix,
 		WorkDir:      workDir,
+		failureCh:    make(chan hotreload.RuntimeFailure, 4),
 	}
 }
 
@@ -160,6 +170,9 @@ func (e *ExpoDevServer) Start(ctx context.Context) error {
 	if err := e.cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start Expo dev server: %w", err)
 	}
+	e.stopping = false
+	e.processDone = make(chan error, 1)
+	go e.watchProcess(ctx, e.cmd, e.processDone)
 
 	// Wait for server to be ready
 	readyChan := make(chan bool, 1)
@@ -212,6 +225,15 @@ func (e *ExpoDevServer) Start(ctx context.Context) error {
 	case err := <-errChan:
 		_ = e.stopLocked()
 		return err
+	case err := <-e.processDone:
+		e.ready = false
+		e.cmd = nil
+		e.processDone = nil
+		if e.cancel != nil {
+			e.cancel()
+			e.cancel = nil
+		}
+		return processExitError("Expo dev server exited before it became ready", err)
 	case <-time.After(60 * time.Second):
 		_ = e.stopLocked()
 		return fmt.Errorf("timeout waiting for Expo dev server to start (60s)")
@@ -237,6 +259,7 @@ func (e *ExpoDevServer) Stop() error {
 func (e *ExpoDevServer) stopLocked() error {
 
 	e.ready = false
+	e.stopping = true
 
 	if e.cancel != nil {
 		e.cancel()
@@ -246,30 +269,64 @@ func (e *ExpoDevServer) stopLocked() error {
 	if e.cmd != nil && e.cmd.Process != nil {
 		cmd := e.cmd
 		pid := cmd.Process.Pid
+		done := e.processDone
 
 		// Kill the entire process group
 		// This ensures Metro bundler and all child processes are killed
 		killProcessGroup(pid)
 
 		// Wait briefly for graceful shutdown
-		done := make(chan error, 1)
-		go func() {
-			done <- cmd.Wait()
-		}()
-
-		select {
-		case <-done:
-			// Process exited gracefully
-		case <-time.After(2 * time.Second):
-			// Force kill the process group
-			forceKillProcessGroup(pid)
-			<-time.After(500 * time.Millisecond)
+		if done != nil {
+			select {
+			case <-done:
+				// Process exited gracefully
+			case <-time.After(2 * time.Second):
+				// Force kill the process group
+				forceKillProcessGroup(pid)
+				<-time.After(500 * time.Millisecond)
+			}
 		}
 
 		e.cmd = nil
+		e.processDone = nil
 	}
 
 	return nil
+}
+
+func (e *ExpoDevServer) watchProcess(ctx context.Context, cmd *exec.Cmd, done chan<- error) {
+	err := cmd.Wait()
+	done <- err
+
+	e.mu.Lock()
+	shouldReport := e.ready && !e.stopping && e.cmd == cmd && ctx.Err() == nil
+	port := e.Port
+	e.mu.Unlock()
+	if !shouldReport {
+		return
+	}
+	e.emitFailure(hotreload.RuntimeFailure{
+		Kind:     hotreload.RuntimeFailureLocalDevServerDown,
+		Provider: e.Name(),
+		Port:     port,
+		Detail:   processExitDetail("Expo dev server exited unexpectedly", err),
+		Fatal:    true,
+		Err:      err,
+	})
+}
+
+func (e *ExpoDevServer) Failures() <-chan hotreload.RuntimeFailure {
+	return e.failureCh
+}
+
+func (e *ExpoDevServer) emitFailure(f hotreload.RuntimeFailure) {
+	if e.failureCh == nil {
+		return
+	}
+	select {
+	case e.failureCh <- f:
+	default:
+	}
 }
 
 // GetPort returns the port the Expo dev server is listening on.

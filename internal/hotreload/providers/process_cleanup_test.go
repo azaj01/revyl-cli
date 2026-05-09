@@ -1,9 +1,15 @@
 package providers
 
 import (
+	"context"
 	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/revyl/cli/internal/hotreload"
 )
 
 func TestExpoDevServerStopDoesNotKillUnownedListenerOnPort(t *testing.T) {
@@ -50,6 +56,110 @@ func TestBareRNDevServerPortAvailabilityDetectsWildcardListener(t *testing.T) {
 	}
 }
 
+func TestExpoDevServerReportsUnexpectedProcessExit(t *testing.T) {
+	server := NewExpoDevServer(t.TempDir(), "myapp", freeProviderTestPort(t), false)
+	cmd := exec.Command("sh", "-c", "exit 7")
+	setSysProcAttr(cmd)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	server.mu.Lock()
+	server.cmd = cmd
+	server.processDone = make(chan error, 1)
+	server.ready = true
+	server.stopping = false
+	server.mu.Unlock()
+	go server.watchProcess(context.Background(), cmd, server.processDone)
+
+	failure := readProviderRuntimeFailure(t, server.Failures())
+	if failure.Kind != hotreload.RuntimeFailureLocalDevServerDown {
+		t.Fatalf("failure kind = %q, want %q", failure.Kind, hotreload.RuntimeFailureLocalDevServerDown)
+	}
+	if !failure.Fatal {
+		t.Fatal("expected process exit to be fatal")
+	}
+	if err := server.Stop(); err != nil {
+		t.Fatalf("Stop() after process exit error = %v", err)
+	}
+	if err := server.Stop(); err != nil {
+		t.Fatalf("second Stop() error = %v", err)
+	}
+}
+
+func TestBareRNDevServerReportsUnexpectedProcessExit(t *testing.T) {
+	server := NewBareRNDevServer(t.TempDir(), freeProviderTestPort(t))
+	cmd := exec.Command("sh", "-c", "exit 7")
+	setSysProcAttr(cmd)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	server.mu.Lock()
+	server.cmd = cmd
+	server.processDone = make(chan error, 1)
+	server.ready = true
+	server.stopping = false
+	server.mu.Unlock()
+	go server.watchProcess(context.Background(), cmd, server.processDone)
+
+	failure := readProviderRuntimeFailure(t, server.Failures())
+	if failure.Kind != hotreload.RuntimeFailureLocalDevServerDown {
+		t.Fatalf("failure kind = %q, want %q", failure.Kind, hotreload.RuntimeFailureLocalDevServerDown)
+	}
+	if !failure.Fatal {
+		t.Fatal("expected process exit to be fatal")
+	}
+	if err := server.Stop(); err != nil {
+		t.Fatalf("Stop() after process exit error = %v", err)
+	}
+	if err := server.Stop(); err != nil {
+		t.Fatalf("second Stop() error = %v", err)
+	}
+}
+
+func TestExpoDevServerCanStartAfterStop(t *testing.T) {
+	withFakeNpxReadyProcess(t)
+
+	server := NewExpoDevServer(t.TempDir(), "myapp", freeProviderTestPort(t), false)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := server.Start(ctx); err != nil {
+		t.Fatalf("first Start() error = %v", err)
+	}
+	if err := server.Stop(); err != nil {
+		t.Fatalf("first Stop() error = %v", err)
+	}
+	if err := server.Start(ctx); err != nil {
+		t.Fatalf("second Start() error = %v", err)
+	}
+	if err := server.Stop(); err != nil {
+		t.Fatalf("second Stop() error = %v", err)
+	}
+}
+
+func TestBareRNDevServerCanStartAfterStop(t *testing.T) {
+	withFakeNpxReadyProcess(t)
+
+	server := NewBareRNDevServer(t.TempDir(), freeProviderTestPort(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := server.Start(ctx); err != nil {
+		t.Fatalf("first Start() error = %v", err)
+	}
+	if err := server.Stop(); err != nil {
+		t.Fatalf("first Stop() error = %v", err)
+	}
+	if err := server.Start(ctx); err != nil {
+		t.Fatalf("second Start() error = %v", err)
+	}
+	if err := server.Stop(); err != nil {
+		t.Fatalf("second Stop() error = %v", err)
+	}
+}
+
 func listenOnProviderTestPort(t *testing.T) (net.Listener, int) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -76,6 +186,41 @@ func listenOnWildcardProviderTestPort(t *testing.T) (net.Listener, int) {
 		t.Fatalf("listener addr %T is not *net.TCPAddr", ln.Addr())
 	}
 	return ln, addr.Port
+}
+
+func freeProviderTestPort(t *testing.T) int {
+	t.Helper()
+	ln, port := listenOnProviderTestPort(t)
+	if err := ln.Close(); err != nil {
+		t.Fatalf("Close listener: %v", err)
+	}
+	return port
+}
+
+func readProviderRuntimeFailure(t *testing.T, failures <-chan hotreload.RuntimeFailure) hotreload.RuntimeFailure {
+	t.Helper()
+	select {
+	case failure := <-failures:
+		return failure
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for runtime failure")
+	}
+	return hotreload.RuntimeFailure{}
+}
+
+func withFakeNpxReadyProcess(t *testing.T) {
+	t.Helper()
+	binDir := t.TempDir()
+	npxPath := filepath.Join(binDir, "npx")
+	script := `#!/bin/sh
+echo "Metro waiting on exp://127.0.0.1:8081"
+trap 'exit 0' TERM INT
+while true; do sleep 1; done
+`
+	if err := os.WriteFile(npxPath, []byte(script), 0755); err != nil {
+		t.Fatalf("write fake npx: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func assertListenerStillAccepts(t *testing.T, ln net.Listener) {

@@ -39,6 +39,25 @@ type TunnelBackendInfoProvider interface {
 	Metadata() TunnelBackendInfo
 }
 
+// RelayReacquireResult describes a replacement relay session created in place.
+type RelayReacquireResult struct {
+	TunnelURL string
+	RelayID   string
+	Transport string
+}
+
+// TunnelBackendReacquirer is implemented by tunnel backends that can replace
+// their public relay session without recreating the whole hot-reload manager.
+type TunnelBackendReacquirer interface {
+	Reacquire(ctx context.Context) (*RelayReacquireResult, error)
+}
+
+// TunnelFailureReporter is implemented by tunnel backends that can report
+// asynchronous transport/runtime failures.
+type TunnelFailureReporter interface {
+	Failures() <-chan RuntimeFailure
+}
+
 // ExternalTunnelBackend wraps a user-provided tunnel URL (e.g. from
 // npx expo start --tunnel). It implements TunnelBackend as a no-op passthrough
 // since the customer manages the tunnel lifecycle externally.

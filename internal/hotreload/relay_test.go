@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -92,6 +93,238 @@ func TestCreateRelaySessionUsesBackendControlPlane(t *testing.T) {
 	}
 }
 
+func TestRelayTunnelBackendReacquireCreatesReplacementSession(t *testing.T) {
+	var createCalls int32
+	var connectCalls int32
+	var revokedOld int32
+
+	upgrader := websocket.Upgrader{CheckOrigin: func(_ *http.Request) bool { return true }}
+	var backendServer *httptest.Server
+	backendServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/hotreload/relays" && r.Method == http.MethodPost:
+			call := atomic.AddInt32(&createCalls, 1)
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{
+				"relay_id":"a-new-%d",
+				"public_url":"https://hr-a-new-%d.relay.example",
+				"connect_url":"%s/api/v1/hotreload/relays/a-new-%d/connect",
+				"connect_token":"connect-token-%d",
+				"transport":"relay",
+				"expires_at":"2026-04-10T12:00:00Z"
+			}`,
+				call,
+				call,
+				"ws"+strings.TrimPrefix(backendServer.URL, "http"),
+				call,
+				call,
+			)
+		case strings.HasSuffix(r.URL.Path, "/connect"):
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("websocket upgrade: %v", err)
+				return
+			}
+			atomic.AddInt32(&connectCalls, 1)
+			t.Cleanup(func() { _ = conn.Close() })
+		case r.URL.Path == "/api/v1/hotreload/relays/a-old" && r.Method == http.MethodDelete:
+			atomic.AddInt32(&revokedOld, 1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"relay_id":"a-old","revoked":true}`))
+		case strings.HasPrefix(r.URL.Path, "/api/v1/hotreload/relays/a-new-") && r.Method == http.MethodDelete:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"relay_id":"a-new-1","revoked":true}`))
+		default:
+			t.Errorf("unexpected backend request: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(backendServer.Close)
+
+	wsBase := "ws" + strings.TrimPrefix(backendServer.URL, "http")
+	relayBackend := &RelayTunnelBackend{
+		client: api.NewClientWithBaseURL("backend-token", backendServer.URL),
+		session: &api.HotReloadRelaySession{
+			RelayID:      "a-old",
+			PublicURL:    "https://hr-a-old.relay.example",
+			ConnectURL:   wsBase + "/api/v1/hotreload/relays/a-old/connect",
+			ConnectToken: "old-token",
+			Transport:    "relay",
+		},
+		localPort:   freePort(t),
+		runCtx:      context.Background(),
+		failures:    make(chan RuntimeFailure, 1),
+		disconnects: make(chan error, 1),
+	}
+
+	result, err := relayBackend.Reacquire(context.Background())
+	if err != nil {
+		t.Fatalf("Reacquire() error = %v", err)
+	}
+	if result.RelayID != "a-new-1" {
+		t.Fatalf("RelayID = %q, want a-new-1", result.RelayID)
+	}
+	if got := atomic.LoadInt32(&connectCalls); got != 1 {
+		t.Fatalf("connect calls = %d, want 1", got)
+	}
+	if got := atomic.LoadInt32(&revokedOld); got != 1 {
+		t.Fatalf("old revokes = %d, want 1", got)
+	}
+	if relayBackend.Metadata().RelayID != "a-new-1" {
+		t.Fatalf("Metadata().RelayID = %q, want a-new-1", relayBackend.Metadata().RelayID)
+	}
+	_ = relayBackend.Stop()
+}
+
+func TestRelayTunnelBackendReacquireRestartsHeartbeatMonitor(t *testing.T) {
+	withRelayTestTimings(t, 10*time.Millisecond, 5*time.Millisecond, 25*time.Millisecond, 3)
+
+	var oldRevoked int32
+	var newHeartbeats int32
+	upgrader := websocket.Upgrader{CheckOrigin: func(_ *http.Request) bool { return true }}
+	var backendServer *httptest.Server
+	backendServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/hotreload/relays" && r.Method == http.MethodPost:
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{
+				"relay_id":"a-new-1",
+				"public_url":"https://hr-a-new-1.relay.example",
+				"connect_url":"%s/api/v1/hotreload/relays/a-new-1/connect",
+				"connect_token":"connect-token",
+				"transport":"relay",
+				"expires_at":"2026-04-10T12:00:00Z"
+			}`, "ws"+strings.TrimPrefix(backendServer.URL, "http"))
+		case strings.HasSuffix(r.URL.Path, "/connect"):
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("websocket upgrade: %v", err)
+				return
+			}
+			t.Cleanup(func() { _ = conn.Close() })
+		case r.URL.Path == "/api/v1/hotreload/relays/a-old/heartbeat" && r.Method == http.MethodPost:
+			if atomic.LoadInt32(&oldRevoked) != 0 {
+				http.Error(w, "Hot reload relay not found", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"relay_id":"a-old","expires_at":%q,"active":true}`, time.Now().Add(time.Minute).Format(time.RFC3339))
+		case r.URL.Path == "/api/v1/hotreload/relays/a-new-1/heartbeat" && r.Method == http.MethodPost:
+			atomic.AddInt32(&newHeartbeats, 1)
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"relay_id":"a-new-1","expires_at":%q,"active":true}`, time.Now().Add(time.Minute).Format(time.RFC3339))
+		case r.URL.Path == "/api/v1/hotreload/relays/a-old" && r.Method == http.MethodDelete:
+			atomic.StoreInt32(&oldRevoked, 1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"relay_id":"a-old","revoked":true}`))
+		case r.URL.Path == "/api/v1/hotreload/relays/a-new-1" && r.Method == http.MethodDelete:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"relay_id":"a-new-1","revoked":true}`))
+		default:
+			t.Errorf("unexpected backend request: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(backendServer.Close)
+
+	relayBackend := &RelayTunnelBackend{
+		client: api.NewClientWithBaseURL("backend-token", backendServer.URL),
+		session: &api.HotReloadRelaySession{
+			RelayID:   "a-old",
+			PublicURL: "https://hr-a-old.relay.example",
+			Transport: "relay",
+		},
+		localPort:   freePort(t),
+		runCtx:      context.Background(),
+		failures:    make(chan RuntimeFailure, 4),
+		disconnects: make(chan error, 1),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	relayBackend.StartHealthMonitor(ctx)
+
+	if _, err := relayBackend.Reacquire(context.Background()); err != nil {
+		t.Fatalf("Reacquire() error = %v", err)
+	}
+	deadline := time.After(time.Second)
+	for atomic.LoadInt32(&newHeartbeats) == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("replacement heartbeat monitor did not heartbeat new relay")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	assertNoRuntimeFailure(t, relayBackend.Failures())
+	_ = relayBackend.Stop()
+}
+
+func TestRelayRuntimeStopDoesNotReportDisconnect(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(_ *http.Request) bool { return true }}
+	serverConnCh := make(chan *websocket.Conn, 1)
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("websocket upgrade: %v", err)
+		}
+		serverConnCh <- conn
+	}))
+	t.Cleanup(wsServer.Close)
+
+	clientConn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(wsServer.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	serverConn := <-serverConnCh
+	t.Cleanup(func() { _ = serverConn.Close() })
+
+	disconnects := make(chan error, 1)
+	runtime := newRelayRuntime(context.Background(), freePort(t), clientConn, nil, nil, func(err error) {
+		disconnects <- err
+	}, nil)
+	runtime.start()
+	runtime.stop()
+
+	select {
+	case err := <-disconnects:
+		t.Fatalf("intentional stop reported disconnect: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestRelayRuntimeRemoteCloseReportsDisconnect(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(_ *http.Request) bool { return true }}
+	serverConnCh := make(chan *websocket.Conn, 1)
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("websocket upgrade: %v", err)
+		}
+		serverConnCh <- conn
+	}))
+	t.Cleanup(wsServer.Close)
+
+	clientConn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(wsServer.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	serverConn := <-serverConnCh
+	t.Cleanup(func() { _ = serverConn.Close() })
+
+	disconnects := make(chan error, 1)
+	runtime := newRelayRuntime(context.Background(), freePort(t), clientConn, nil, nil, func(err error) {
+		disconnects <- err
+	}, nil)
+	runtime.start()
+	_ = serverConn.Close()
+
+	select {
+	case <-disconnects:
+	case <-time.After(time.Second):
+		t.Fatal("remote close did not report disconnect")
+	}
+	runtime.stop()
+}
+
 func TestRelayRuntimeExportsLocalMetroSpanFromEnvelopeTraceparent(t *testing.T) {
 	spanCh := make(chan *tracepb.TracesData, 1)
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -151,7 +384,7 @@ func TestRelayRuntimeExportsLocalMetroSpanFromEnvelopeTraceparent(t *testing.T) 
 		t.Fatalf("parse port %q: %v", port, err)
 	}
 	traceClient := api.NewClientWithBaseURL("api-key", apiServer.URL)
-	runtime := newRelayRuntime(context.Background(), portInt, clientConn, traceClient, nil, nil)
+	runtime := newRelayRuntime(context.Background(), portInt, clientConn, traceClient, nil, nil, nil)
 	t.Cleanup(runtime.stop)
 
 	streamID := "stream-1"
@@ -195,4 +428,260 @@ func TestRelayRuntimeExportsLocalMetroSpanFromEnvelopeTraceparent(t *testing.T) 
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for local Metro span export")
 	}
+}
+
+func TestRelayHeartbeatNotFoundEmitsLeaseExpiredFailure(t *testing.T) {
+	withRelayTestTimings(t, 10*time.Millisecond, 5*time.Millisecond, 25*time.Millisecond, 3)
+
+	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"detail":"Hot reload relay not found"}`))
+	}))
+	t.Cleanup(backendServer.Close)
+
+	relayBackend := &RelayTunnelBackend{
+		client:      api.NewClientWithBaseURL("", backendServer.URL),
+		session:     &api.HotReloadRelaySession{RelayID: "a-test"},
+		failures:    make(chan RuntimeFailure, 1),
+		disconnects: make(chan error, 1),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go relayBackend.heartbeatLoop(ctx)
+
+	failure := readRuntimeFailure(t, relayBackend.Failures())
+	if failure.Kind != RuntimeFailureRelayLeaseExpired {
+		t.Fatalf("failure kind = %q, want %q", failure.Kind, RuntimeFailureRelayLeaseExpired)
+	}
+	if !failure.Fatal {
+		t.Fatal("expected lease expiry to be fatal")
+	}
+}
+
+func TestRelayHeartbeatBudgetEmitsUnreachableFailure(t *testing.T) {
+	withRelayTestTimings(t, 10*time.Millisecond, 5*time.Millisecond, 25*time.Millisecond, 5)
+
+	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"detail":"relay unavailable"}`))
+	}))
+	t.Cleanup(backendServer.Close)
+
+	relayBackend := &RelayTunnelBackend{
+		client:      api.NewClientWithBaseURL("", backendServer.URL),
+		session:     &api.HotReloadRelaySession{RelayID: "a-test"},
+		failures:    make(chan RuntimeFailure, 1),
+		disconnects: make(chan error, 1),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go relayBackend.heartbeatLoop(ctx)
+
+	failure := readRuntimeFailure(t, relayBackend.Failures())
+	if failure.Kind != RuntimeFailureRelayUnreachable {
+		t.Fatalf("failure kind = %q, want %q", failure.Kind, RuntimeFailureRelayUnreachable)
+	}
+	if !failure.Fatal {
+		t.Fatal("expected relay unreachable to be fatal")
+	}
+}
+
+func TestRelayReconnectBudgetEmitsUnreachableFailure(t *testing.T) {
+	withRelayTestTimings(t, time.Second, 5*time.Millisecond, 18*time.Millisecond, 5)
+
+	relayBackend := &RelayTunnelBackend{
+		session: &api.HotReloadRelaySession{
+			RelayID:      "a-test",
+			ConnectURL:   "ws://127.0.0.1:1/connect",
+			ConnectToken: "token",
+		},
+		localPort:   8081,
+		failures:    make(chan RuntimeFailure, 1),
+		disconnects: make(chan error, 1),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go relayBackend.reconnectLoop(ctx)
+
+	relayBackend.disconnects <- fmt.Errorf("relay websocket disconnected")
+
+	failure := readRuntimeFailure(t, relayBackend.Failures())
+	if failure.Kind != RuntimeFailureRelayUnreachable {
+		t.Fatalf("failure kind = %q, want %q", failure.Kind, RuntimeFailureRelayUnreachable)
+	}
+}
+
+func TestRelayReconnectSkipsStaleSessionAfterReacquire(t *testing.T) {
+	withRelayTestTimings(t, time.Second, 25*time.Millisecond, 60*time.Millisecond, 5)
+
+	logs := make(chan string, 8)
+	relayBackend := &RelayTunnelBackend{
+		session: &api.HotReloadRelaySession{
+			RelayID:      "a-old",
+			ConnectURL:   "ws://127.0.0.1:1/connect",
+			ConnectToken: "old-token",
+		},
+		localPort:   8081,
+		failures:    make(chan RuntimeFailure, 1),
+		disconnects: make(chan error, 1),
+		onLog: func(message string) {
+			select {
+			case logs <- message:
+			default:
+			}
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go relayBackend.reconnectLoop(ctx)
+
+	relayBackend.disconnects <- fmt.Errorf("relay websocket disconnected")
+	for {
+		select {
+		case logLine := <-logs:
+			if strings.Contains(logLine, "connection lost") {
+				goto capturedOldSession
+			}
+		case <-time.After(time.Second):
+			t.Fatal("reconnect loop did not capture the original disconnect")
+		}
+	}
+
+capturedOldSession:
+	relayBackend.mu.Lock()
+	relayBackend.session = &api.HotReloadRelaySession{
+		RelayID:      "a-new",
+		ConnectURL:   "ws://127.0.0.1:1/connect",
+		ConnectToken: "new-token",
+	}
+	relayBackend.mu.Unlock()
+
+	time.Sleep(90 * time.Millisecond)
+	assertNoRuntimeFailure(t, relayBackend.Failures())
+}
+
+func TestRelayRuntimeClassifiesLocalWebSocketConnectionRefused(t *testing.T) {
+	clientConn, serverConn := newRelayRuntimeTestWebSocket(t)
+	failures := make(chan RuntimeFailure, 1)
+	runtime := newRelayRuntime(context.Background(), freePort(t), clientConn, nil, nil, nil, func(f RuntimeFailure) {
+		failures <- f
+	})
+	t.Cleanup(runtime.stop)
+	t.Cleanup(func() { _ = serverConn.Close() })
+
+	runtime.handleWSStart(relayEnvelope{
+		Kind:     "websocket.start",
+		StreamID: "ws-1",
+		Path:     "/expo-dev-plugins/broadcast",
+	})
+
+	failure := readRuntimeFailure(t, failures)
+	if failure.Kind != RuntimeFailureLocalDevServerDown {
+		t.Fatalf("failure kind = %q, want %q", failure.Kind, RuntimeFailureLocalDevServerDown)
+	}
+	if !failure.Fatal {
+		t.Fatal("expected local websocket refusal to be fatal")
+	}
+}
+
+func TestRelayRuntimeClassifiesMetro500AsNonFatal(t *testing.T) {
+	clientConn, serverConn := newRelayRuntimeTestWebSocket(t)
+	failures := make(chan RuntimeFailure, 1)
+	localServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("metro exploded"))
+	}))
+	t.Cleanup(localServer.Close)
+	req, err := http.NewRequest(http.MethodGet, localServer.URL, nil)
+	if err != nil {
+		t.Fatalf("parse local URL: %v", err)
+	}
+	_, port, err := net.SplitHostPort(req.URL.Host)
+	if err != nil {
+		t.Fatalf("SplitHostPort() error = %v", err)
+	}
+	var portInt int
+	if _, err := fmt.Sscanf(port, "%d", &portInt); err != nil {
+		t.Fatalf("parse port %q: %v", port, err)
+	}
+
+	runtime := newRelayRuntime(context.Background(), portInt, clientConn, nil, nil, nil, func(f RuntimeFailure) {
+		failures <- f
+	})
+	t.Cleanup(runtime.stop)
+	t.Cleanup(func() { _ = serverConn.Close() })
+
+	runtime.handleHTTPRequestStart(relayEnvelope{
+		Kind:     "http.request.start",
+		StreamID: "http-1",
+		Method:   http.MethodGet,
+		Path:     "/index.bundle",
+	})
+	runtime.handleHTTPRequestEnd(relayEnvelope{Kind: "http.request.end", StreamID: "http-1"})
+
+	failure := readRuntimeFailure(t, failures)
+	if failure.Kind != RuntimeFailureMetro500 {
+		t.Fatalf("failure kind = %q, want %q", failure.Kind, RuntimeFailureMetro500)
+	}
+	if failure.Fatal {
+		t.Fatal("expected Metro 500 to be non-fatal")
+	}
+}
+
+func withRelayTestTimings(t *testing.T, heartbeatEvery time.Duration, reconnectBackoff time.Duration, reconnectTimeout time.Duration, heartbeatFailures int) {
+	t.Helper()
+	oldHeartbeatEvery := relayHeartbeatEvery
+	oldReconnectBackoff := relayReconnectBackoff
+	oldReconnectTimeout := relayReconnectFailureTimeout
+	oldHeartbeatFailures := relayHeartbeatFailuresBeforeFatal
+	relayHeartbeatEvery = heartbeatEvery
+	relayReconnectBackoff = reconnectBackoff
+	relayReconnectFailureTimeout = reconnectTimeout
+	relayHeartbeatFailuresBeforeFatal = heartbeatFailures
+	t.Cleanup(func() {
+		relayHeartbeatEvery = oldHeartbeatEvery
+		relayReconnectBackoff = oldReconnectBackoff
+		relayReconnectFailureTimeout = oldReconnectTimeout
+		relayHeartbeatFailuresBeforeFatal = oldHeartbeatFailures
+	})
+}
+
+func readRuntimeFailure(t *testing.T, failures <-chan RuntimeFailure) RuntimeFailure {
+	t.Helper()
+	select {
+	case failure := <-failures:
+		return failure
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for runtime failure")
+	}
+	return RuntimeFailure{}
+}
+
+func newRelayRuntimeTestWebSocket(t *testing.T) (*websocket.Conn, *websocket.Conn) {
+	t.Helper()
+	upgrader := websocket.Upgrader{CheckOrigin: func(_ *http.Request) bool { return true }}
+	serverConnCh := make(chan *websocket.Conn, 1)
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("websocket upgrade: %v", err)
+		}
+		serverConnCh <- conn
+	}))
+	t.Cleanup(wsServer.Close)
+
+	wsURL := "ws" + strings.TrimPrefix(wsServer.URL, "http")
+	clientConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	t.Cleanup(func() { _ = clientConn.Close() })
+
+	select {
+	case serverConn := <-serverConnCh:
+		return clientConn, serverConn
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for relay runtime websocket")
+	}
+	return nil, nil
 }

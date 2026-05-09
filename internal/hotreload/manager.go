@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/revyl/cli/internal/api"
 	"github.com/revyl/cli/internal/config"
@@ -48,6 +49,12 @@ var waitForExpoMetroTransport = WaitForExpoMetroTransport
 var waitForExpoManifestFetchResult = waitForExpoManifestFetch
 var waitForExpoBundlePrewarmFromManifest = WaitForExpoBundlePrewarmFromManifest
 var waitForExpoManifestHeadReady = WaitForExpoManifestHeadReady
+
+var (
+	runtimeFailureDedupWindow         = 30 * time.Second
+	localDevServerHealthInterval      = 5 * time.Second
+	localDevServerFailuresBeforeFatal = 3
+)
 
 // RegisterExpoDevServerFactory registers the Expo dev server factory.
 // Called by the providers package during init.
@@ -115,6 +122,24 @@ type Manager struct {
 	// This lets callers pass the full deep link Expo printed without requiring app_scheme.
 	externalDeepLinkURL string
 
+	// failures receives deduplicated runtime failures from providers and tunnels.
+	failures chan RuntimeFailure
+
+	// failureLast tracks the last emission time for a dedupe key.
+	failureLast map[string]time.Time
+
+	// recoveryMu serializes recovery paths that stop/start the local dev server.
+	recoveryMu sync.Mutex
+
+	// localRecoveryAttempted caps automatic local dev-server restart to once.
+	localRecoveryAttempted bool
+
+	// relayRecoveryMu serializes relay re-acquire attempts.
+	relayRecoveryMu sync.Mutex
+
+	// relayRecoveryAttempted caps automatic relay re-acquire to once.
+	relayRecoveryAttempted bool
+
 	// mu protects concurrent access.
 	mu sync.Mutex
 
@@ -144,6 +169,8 @@ func NewManager(providerName string, providerConfig *config.ProviderConfig, work
 		workDir:             workDir,
 		transportPreference: "relay",
 		targetPlatform:      "ios",
+		failures:            make(chan RuntimeFailure, 16),
+		failureLast:         make(map[string]time.Time),
 	}
 }
 
@@ -263,6 +290,9 @@ func (m *Manager) Start(ctx context.Context) (result *StartResult, err error) {
 	if m.running {
 		return nil, fmt.Errorf("hot reload is already running")
 	}
+	m.resetRuntimeFailuresLocked()
+	m.localRecoveryAttempted = false
+	m.relayRecoveryAttempted = false
 
 	m.ctx, m.cancel = context.WithCancel(ctx)
 	defer func() {
@@ -414,6 +444,7 @@ func (m *Manager) Start(ctx context.Context) (result *StartResult, err error) {
 	deepLinkURL := devServer.GetDeepLinkURL(tunnelURL)
 
 	m.running = true
+	m.watchRuntimeFailures(m.ctx, devServer, backend)
 
 	// 7. Run advisory HMR diagnostics only in debug mode. These checks are
 	// intentionally non-blocking and can race Metro/Expo startup, so default
@@ -542,6 +573,26 @@ func (m *Manager) cleanupLocked(logStopped bool) {
 	}
 
 	m.running = false
+	m.resetRuntimeFailuresLocked()
+}
+
+func (m *Manager) resetRuntimeFailuresLocked() {
+	if m.failureLast == nil {
+		m.failureLast = make(map[string]time.Time)
+	} else {
+		clear(m.failureLast)
+	}
+	if m.failures == nil {
+		m.failures = make(chan RuntimeFailure, 16)
+		return
+	}
+	for {
+		select {
+		case <-m.failures:
+		default:
+			return
+		}
+	}
 }
 
 // startExternal handles the short-circuit path when an external tunnel URL is
@@ -620,6 +671,346 @@ func (m *Manager) GetDevServerPort() int {
 	return 0
 }
 
+// Failures returns deduplicated runtime failures detected after startup.
+func (m *Manager) Failures() <-chan RuntimeFailure {
+	return m.failures
+}
+
+func (m *Manager) watchRuntimeFailures(ctx context.Context, devServer DevServer, tunnel TunnelBackend) {
+	if reporter, ok := devServer.(DevServerFailureReporter); ok {
+		go m.forwardRuntimeFailures(ctx, reporter.Failures())
+	}
+	if reporter, ok := tunnel.(TunnelFailureReporter); ok {
+		go m.forwardRuntimeFailures(ctx, reporter.Failures())
+	}
+	go m.monitorLocalDevServerHealth(ctx, devServer)
+}
+
+func (m *Manager) forwardRuntimeFailures(ctx context.Context, failures <-chan RuntimeFailure) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case failure, ok := <-failures:
+			if !ok {
+				return
+			}
+			m.handleRuntimeFailure(ctx, failure)
+		}
+	}
+}
+
+func (m *Manager) monitorLocalDevServerHealth(ctx context.Context, devServer DevServer) {
+	ticker := time.NewTicker(localDevServerHealthInterval)
+	defer ticker.Stop()
+
+	consecutiveConnectionRefused := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			check := checkMetroHealth(devServer.GetPort(), "")
+			if check.Passed {
+				consecutiveConnectionRefused = 0
+				continue
+			}
+
+			if localHealthCheckConnectionRefused(check) {
+				consecutiveConnectionRefused++
+				if consecutiveConnectionRefused < localDevServerFailuresBeforeFatal {
+					continue
+				}
+				recovered := m.handleRuntimeFailure(ctx, RuntimeFailure{
+					Kind:     RuntimeFailureLocalDevServerDown,
+					Provider: devServer.Name(),
+					Port:     devServer.GetPort(),
+					Detail:   fmt.Sprintf("local dev server health check failed: %s", check.Detail),
+					Fatal:    true,
+				})
+				if !recovered {
+					return
+				}
+				consecutiveConnectionRefused = 0
+				continue
+			}
+
+			consecutiveConnectionRefused = 0
+			if failure, ok := runtimeFailureFromLocalHealthCheck(check, devServer.GetPort()); ok {
+				failure.Provider = devServer.Name()
+				m.emitRuntimeFailure(failure)
+			}
+		}
+	}
+}
+
+func localHealthCheckConnectionRefused(check DiagnosticCheck) bool {
+	return strings.Contains(strings.ToLower(check.Detail), "connection refused")
+}
+
+func runtimeFailureFromLocalHealthCheck(check DiagnosticCheck, localPort int) (RuntimeFailure, bool) {
+	if check.Passed {
+		return RuntimeFailure{}, false
+	}
+	lowerDetail := strings.ToLower(check.Detail)
+	if strings.Contains(lowerDetail, "status 5") {
+		return RuntimeFailure{
+			Kind:   RuntimeFailureMetro500,
+			Port:   localPort,
+			Detail: fmt.Sprintf("%s: %s", check.Name, check.Detail),
+			Fatal:  false,
+		}, true
+	}
+	if localHealthCheckConnectionRefused(check) {
+		return RuntimeFailure{}, false
+	}
+	return RuntimeFailure{
+		Kind:   RuntimeFailureLocalDevServerDown,
+		Port:   localPort,
+		Detail: fmt.Sprintf("local dev server health check warning: %s", check.Detail),
+		Fatal:  false,
+	}, true
+}
+
+func (m *Manager) handleRuntimeFailure(ctx context.Context, failure RuntimeFailure) bool {
+	if m.shouldRecoverLocalDevServer(failure) {
+		if recovered, updated := m.tryRecoverLocalDevServer(ctx, failure); recovered {
+			return true
+		} else {
+			failure = updated
+		}
+	}
+	m.emitRuntimeFailure(failure)
+	return false
+}
+
+func (m *Manager) shouldRecoverLocalDevServer(failure RuntimeFailure) bool {
+	return failure.Fatal && failure.Kind == RuntimeFailureLocalDevServerDown
+}
+
+func (m *Manager) tryRecoverLocalDevServer(ctx context.Context, failure RuntimeFailure) (bool, RuntimeFailure) {
+	m.recoveryMu.Lock()
+	defer m.recoveryMu.Unlock()
+
+	m.mu.Lock()
+	devServer := m.devServer
+	tunnel := m.tunnel
+	running := m.running
+	providerName := m.providerName
+	alreadyAttempted := m.localRecoveryAttempted
+	m.mu.Unlock()
+
+	if !running || devServer == nil || tunnel == nil {
+		return false, failureWithRestartError(failure, fmt.Errorf("hot reload manager is no longer running"))
+	}
+
+	if checkMetroHealth(devServer.GetPort(), "").Passed {
+		m.log("Local %s dev server is responsive again; continuing.", devServer.Name())
+		return true, failure
+	}
+
+	if alreadyAttempted {
+		return false, failureWithRestartError(failure, fmt.Errorf("local dev server restart already attempted"))
+	}
+
+	tunnelURL := strings.TrimSpace(tunnel.PublicURL())
+	if tunnelURL == "" {
+		return false, failureWithRestartError(failure, fmt.Errorf("tunnel URL is unavailable"))
+	}
+
+	m.mu.Lock()
+	m.localRecoveryAttempted = true
+	m.mu.Unlock()
+
+	m.log("Local %s dev server stopped; restarting once...", devServer.Name())
+	if err := devServer.Stop(); err != nil {
+		return false, failureWithRestartError(failure, fmt.Errorf("failed to stop stale local dev server: %w", err))
+	}
+	if err := devServer.Start(ctx); err != nil {
+		return false, failureWithRestartError(failure, fmt.Errorf("failed to restart local dev server: %w", err))
+	}
+	if err := m.waitForRecoveredDevServer(ctx, providerName, devServer.GetPort(), tunnelURL); err != nil {
+		return false, failureWithRestartError(failure, fmt.Errorf("local dev server restarted but relay path did not recover: %w", err))
+	}
+	m.log("Local %s dev server restarted", devServer.Name())
+	return true, failure
+}
+
+// RecoverRelay replaces an expired relay session in place and restarts the
+// owned local dev server so Metro advertises the replacement public host.
+func (m *Manager) RecoverRelay(ctx context.Context) (*StartResult, error) {
+	m.recoveryMu.Lock()
+	defer m.recoveryMu.Unlock()
+
+	m.relayRecoveryMu.Lock()
+	defer m.relayRecoveryMu.Unlock()
+
+	m.mu.Lock()
+	if m.relayRecoveryAttempted {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("relay recovery already attempted")
+	}
+	m.relayRecoveryAttempted = true
+	devServer := m.devServer
+	tunnel := m.tunnel
+	running := m.running
+	providerName := m.providerName
+	managerCtx := m.ctx
+	m.mu.Unlock()
+
+	if !running || devServer == nil || tunnel == nil {
+		return nil, fmt.Errorf("hot reload manager is no longer running")
+	}
+	reacquirer, ok := tunnel.(TunnelBackendReacquirer)
+	if !ok {
+		return nil, fmt.Errorf("active tunnel does not support relay recovery")
+	}
+	if managerCtx == nil {
+		managerCtx = ctx
+	}
+
+	m.log("Relay lease expired; creating a new relay once...")
+	recovered, err := reacquirer.Reacquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tunnelURL := strings.TrimSpace(recovered.TunnelURL)
+	if tunnelURL == "" {
+		tunnelURL = strings.TrimSpace(tunnel.PublicURL())
+	}
+	if tunnelURL == "" {
+		return nil, fmt.Errorf("replacement relay URL is unavailable")
+	}
+
+	devServer.SetProxyURL(tunnelURL)
+	m.log("Restarting local %s dev server for the new relay...", devServer.Name())
+	if err := devServer.Stop(); err != nil {
+		return nil, fmt.Errorf("failed to stop local dev server during relay recovery: %w", err)
+	}
+	if err := devServer.Start(managerCtx); err != nil {
+		return nil, fmt.Errorf("failed to restart local dev server during relay recovery: %w", err)
+	}
+	if err := m.waitForRecoveredDevServer(managerCtx, providerName, devServer.GetPort(), tunnelURL); err != nil {
+		return nil, fmt.Errorf("replacement relay did not become reachable: %w", err)
+	}
+
+	transport := strings.TrimSpace(recovered.Transport)
+	if transport == "" {
+		transport = "relay"
+	}
+	relayID := strings.TrimSpace(recovered.RelayID)
+	if infoProvider, ok := tunnel.(TunnelBackendInfoProvider); ok {
+		info := infoProvider.Metadata()
+		if strings.TrimSpace(info.Transport) != "" {
+			transport = info.Transport
+		}
+		if strings.TrimSpace(info.RelayID) != "" {
+			relayID = info.RelayID
+		}
+	}
+
+	m.log("Relay recovered: %s", relayID)
+	return &StartResult{
+		TunnelURL:     tunnelURL,
+		DeepLinkURL:   devServer.GetDeepLinkURL(tunnelURL),
+		Transport:     transport,
+		RelayID:       relayID,
+		DevServerPort: devServer.GetPort(),
+	}, nil
+}
+
+func (m *Manager) waitForRecoveredDevServer(ctx context.Context, providerName string, localPort int, tunnelURL string) error {
+	switch providerName {
+	case "expo":
+		_, err := waitForExpoMetroTransport(
+			ctx,
+			localPort,
+			tunnelURL,
+			metroTunnelReadyTimeout,
+			metroTunnelReadyPollInterval,
+		)
+		return err
+	case "react-native":
+		_, err := WaitForMetroTunnel(
+			ctx,
+			localPort,
+			tunnelURL,
+			metroTunnelReadyTimeout,
+			metroTunnelReadyPollInterval,
+		)
+		return err
+	default:
+		check := checkMetroHealth(localPort, tunnelURL)
+		if check.Passed {
+			return nil
+		}
+		return fmt.Errorf("%s: %s", check.Name, check.Detail)
+	}
+}
+
+func failureWithRestartError(failure RuntimeFailure, err error) RuntimeFailure {
+	failure.Fatal = true
+	failure.Err = err
+	detail := strings.TrimSpace(failure.Detail)
+	restartDetail := fmt.Sprintf("local dev server restart failed: %v", err)
+	if detail == "" {
+		failure.Detail = restartDetail
+		return failure
+	}
+	if strings.Contains(detail, restartDetail) {
+		return failure
+	}
+	failure.Detail = detail + "; " + restartDetail
+	return failure
+}
+
+func (m *Manager) emitRuntimeFailure(failure RuntimeFailure) {
+	if failure.Kind == "" {
+		return
+	}
+
+	m.mu.Lock()
+	if m.failureLast == nil {
+		m.failureLast = make(map[string]time.Time)
+	}
+	if m.failures == nil {
+		m.failures = make(chan RuntimeFailure, 16)
+	}
+	provider := m.providerName
+	port := 0
+	if m.devServer != nil {
+		port = m.devServer.GetPort()
+	}
+	relayID := ""
+	if infoProvider, ok := m.tunnel.(TunnelBackendInfoProvider); ok {
+		relayID = infoProvider.Metadata().RelayID
+	}
+	failure = failure.WithDefaults(provider, port, relayID)
+	now := time.Now()
+	for existingKey, last := range m.failureLast {
+		if now.Sub(last) >= runtimeFailureDedupWindow {
+			delete(m.failureLast, existingKey)
+		}
+	}
+	key := runtimeFailureDedupeKey(failure)
+	if last, ok := m.failureLast[key]; ok && now.Sub(last) < runtimeFailureDedupWindow {
+		m.mu.Unlock()
+		return
+	}
+	m.failureLast[key] = now
+	ch := m.failures
+	m.mu.Unlock()
+
+	select {
+	case ch <- failure:
+	default:
+	}
+}
+
+func runtimeFailureDedupeKey(f RuntimeFailure) string {
+	return fmt.Sprintf("%s|%t|%s|%d|%s", f.Kind, f.Fatal, f.Provider, f.Port, f.RelayID)
+}
+
 // runDiagnostics probes every layer of the HMR pipeline and logs per-check
 // results. Intended to run in a goroutine immediately after Start() so results
 // appear shortly after "Dev loop ready".
@@ -630,6 +1021,9 @@ func (m *Manager) runDiagnostics(localPort int, tunnelURL string) {
 			m.log("[hmr diagnostic] %s: %s", c.Name, c.Detail)
 		} else {
 			m.log("[hmr diagnostic] %s: advisory warning (%s)", c.Name, c.Detail)
+			if failure, ok := runtimeFailureFromDiagnostic(c, localPort); ok {
+				m.emitRuntimeFailure(failure)
+			}
 		}
 	}
 	if !result.AllPassed {
@@ -670,6 +1064,36 @@ func (m *Manager) runExternalExpoDiagnostics(ctx context.Context, tunnelURL stri
 		return
 	}
 	m.log("[hmr diagnostic] External Expo bundle prewarm: advisory warning (%s)", bundleCheck.Detail)
+}
+
+func runtimeFailureFromDiagnostic(check DiagnosticCheck, localPort int) (RuntimeFailure, bool) {
+	name := strings.ToLower(check.Name)
+	detail := strings.ToLower(check.Detail)
+	switch {
+	case strings.Contains(name, "manifest"):
+		return RuntimeFailure{
+			Kind:   RuntimeFailureManifestUnhealthy,
+			Port:   localPort,
+			Detail: fmt.Sprintf("%s: %s", check.Name, check.Detail),
+			Fatal:  false,
+		}, true
+	case strings.Contains(name, "bundle"):
+		return RuntimeFailure{
+			Kind:   RuntimeFailureBundleSlow,
+			Port:   localPort,
+			Detail: fmt.Sprintf("%s: %s", check.Name, check.Detail),
+			Fatal:  false,
+		}, true
+	case strings.Contains(name, "metro") && strings.Contains(detail, "status 5"):
+		return RuntimeFailure{
+			Kind:   RuntimeFailureMetro500,
+			Port:   localPort,
+			Detail: fmt.Sprintf("%s: %s", check.Name, check.Detail),
+			Fatal:  false,
+		}, true
+	default:
+		return RuntimeFailure{}, false
+	}
 }
 
 // attachDevServerOutputCallback wires process output callbacks when supported.

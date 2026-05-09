@@ -3,6 +3,8 @@ package hotreload
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,6 +24,46 @@ func (f *fakeDevServer) GetDeepLinkURL(tunnelURL string) string {
 }
 func (f *fakeDevServer) Name() string                 { return "fake" }
 func (f *fakeDevServer) SetProxyURL(tunnelURL string) {}
+
+type fakePortDevServer struct {
+	fakeDevServer
+	port int
+}
+
+func (f *fakePortDevServer) GetPort() int { return f.port }
+
+type fakeRestartDevServer struct {
+	fakeDevServer
+	port     int
+	name     string
+	starts   int
+	stops    int
+	proxyURL string
+	startErr error
+	stopErr  error
+}
+
+func (f *fakeRestartDevServer) Start(ctx context.Context) error {
+	f.starts++
+	return f.startErr
+}
+func (f *fakeRestartDevServer) Stop() error {
+	f.stops++
+	return f.stopErr
+}
+func (f *fakeRestartDevServer) GetPort() int { return f.port }
+func (f *fakeRestartDevServer) GetDeepLinkURL(tunnelURL string) string {
+	return "deep://" + tunnelURL
+}
+func (f *fakeRestartDevServer) Name() string {
+	if f.name != "" {
+		return f.name
+	}
+	return "fake"
+}
+func (f *fakeRestartDevServer) SetProxyURL(tunnelURL string) {
+	f.proxyURL = tunnelURL
+}
 
 type fakeOutputDevServer struct {
 	fakeDevServer
@@ -54,6 +96,59 @@ func (f *fakeTunnelBackend) StartHealthMonitor(_ context.Context) {}
 func (f *fakeTunnelBackend) Stop() error { return nil }
 
 func (f *fakeTunnelBackend) PublicURL() string { return f.publicURL }
+
+type fakeRecoveringTunnelBackend struct {
+	publicURL     string
+	relayID       string
+	transport     string
+	reacquireErr  error
+	reacquires    int
+	metadataCalls int
+}
+
+func (f *fakeRecoveringTunnelBackend) Start(_ context.Context, _ int) (string, error) {
+	return f.publicURL, nil
+}
+
+func (f *fakeRecoveringTunnelBackend) StartHealthMonitor(_ context.Context) {}
+
+func (f *fakeRecoveringTunnelBackend) Stop() error { return nil }
+
+func (f *fakeRecoveringTunnelBackend) PublicURL() string { return f.publicURL }
+
+func (f *fakeRecoveringTunnelBackend) Metadata() TunnelBackendInfo {
+	f.metadataCalls++
+	return TunnelBackendInfo{Transport: f.transport, RelayID: f.relayID}
+}
+
+func (f *fakeRecoveringTunnelBackend) Reacquire(_ context.Context) (*RelayReacquireResult, error) {
+	f.reacquires++
+	if f.reacquireErr != nil {
+		return nil, f.reacquireErr
+	}
+	if f.transport == "" {
+		f.transport = "relay"
+	}
+	f.publicURL = "https://new-relay.example"
+	f.relayID = "a-new"
+	return &RelayReacquireResult{TunnelURL: f.publicURL, RelayID: f.relayID, Transport: f.transport}, nil
+}
+
+type blockingRecoveringTunnelBackend struct {
+	fakeRecoveringTunnelBackend
+	started chan struct{}
+	unblock chan struct{}
+}
+
+func (f *blockingRecoveringTunnelBackend) Reacquire(ctx context.Context) (*RelayReacquireResult, error) {
+	close(f.started)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-f.unblock:
+	}
+	return f.fakeRecoveringTunnelBackend.Reacquire(ctx)
+}
 
 type fakeLoggingTunnelBackend struct {
 	publicURL string
@@ -254,6 +349,596 @@ func TestAttachDevServerDebugMode_IgnoresUnsupportedServer(t *testing.T) {
 
 	unsupported := &fakeDevServer{}
 	m.attachDevServerDebugMode(unsupported)
+}
+
+func TestManagerLocalHealthMonitorEmitsLocalDevServerDown(t *testing.T) {
+	oldInterval := localDevServerHealthInterval
+	oldFailures := localDevServerFailuresBeforeFatal
+	localDevServerHealthInterval = 10 * time.Millisecond
+	localDevServerFailuresBeforeFatal = 3
+	t.Cleanup(func() {
+		localDevServerHealthInterval = oldInterval
+		localDevServerFailuresBeforeFatal = oldFailures
+	})
+
+	m := NewManager("expo", &config.ProviderConfig{AppScheme: "myapp"}, ".")
+	devServer := &fakePortDevServer{port: freePort(t)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.monitorLocalDevServerHealth(ctx, devServer)
+
+	failure := readRuntimeFailure(t, m.Failures())
+	if failure.Kind != RuntimeFailureLocalDevServerDown {
+		t.Fatalf("failure kind = %q, want %q", failure.Kind, RuntimeFailureLocalDevServerDown)
+	}
+	if failure.Port != devServer.port {
+		t.Fatalf("failure port = %d, want %d", failure.Port, devServer.port)
+	}
+	if !failure.Fatal {
+		t.Fatal("expected local dev server down to be fatal")
+	}
+}
+
+func TestManagerLocalHealthMonitorEmitsMetro500Warning(t *testing.T) {
+	oldInterval := localDevServerHealthInterval
+	localDevServerHealthInterval = 10 * time.Millisecond
+	t.Cleanup(func() {
+		localDevServerHealthInterval = oldInterval
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	m := NewManager("expo", &config.ProviderConfig{AppScheme: "myapp"}, ".")
+	devServer := &fakePortDevServer{port: testServerPort(t, srv)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.monitorLocalDevServerHealth(ctx, devServer)
+
+	failure := readRuntimeFailure(t, m.Failures())
+	if failure.Kind != RuntimeFailureMetro500 {
+		t.Fatalf("failure kind = %q, want %q", failure.Kind, RuntimeFailureMetro500)
+	}
+	if failure.Fatal {
+		t.Fatal("expected Metro 500 health failure to be warning-only")
+	}
+}
+
+func TestManagerLocalHealthMonitorEmitsTimeoutWarning(t *testing.T) {
+	withDiagnosticProbeTimeouts(t, 10*time.Millisecond, 50*time.Millisecond)
+	oldInterval := localDevServerHealthInterval
+	localDevServerHealthInterval = 10 * time.Millisecond
+	t.Cleanup(func() {
+		localDevServerHealthInterval = oldInterval
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	m := NewManager("expo", &config.ProviderConfig{AppScheme: "myapp"}, ".")
+	devServer := &fakePortDevServer{port: testServerPort(t, srv)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.monitorLocalDevServerHealth(ctx, devServer)
+
+	failure := readRuntimeFailure(t, m.Failures())
+	if failure.Kind != RuntimeFailureLocalDevServerDown {
+		t.Fatalf("failure kind = %q, want %q", failure.Kind, RuntimeFailureLocalDevServerDown)
+	}
+	if failure.Fatal {
+		t.Fatal("expected timeout health failure to be warning-only")
+	}
+}
+
+func TestManagerRecoversFirstLocalDevServerFailure(t *testing.T) {
+	var transportChecks int
+	withFakeRecoveryTransport(t, nil, &transportChecks)
+
+	devServer := &fakeRestartDevServer{port: freePort(t), name: "Expo"}
+	m := managerWithRecoverableDevServer(devServer)
+
+	recovered := m.handleRuntimeFailure(context.Background(), RuntimeFailure{
+		Kind:   RuntimeFailureLocalDevServerDown,
+		Port:   devServer.port,
+		Detail: "Expo dev server exited unexpectedly",
+		Fatal:  true,
+	})
+	if !recovered {
+		t.Fatal("expected first local failure to recover")
+	}
+	if devServer.stops != 1 {
+		t.Fatalf("stops = %d, want 1", devServer.stops)
+	}
+	if devServer.starts != 1 {
+		t.Fatalf("starts = %d, want 1", devServer.starts)
+	}
+	if transportChecks != 1 {
+		t.Fatalf("transport checks = %d, want 1", transportChecks)
+	}
+	assertNoRuntimeFailure(t, m.Failures())
+}
+
+func TestManagerRecoversRelayLocalConnectionRefusedFailure(t *testing.T) {
+	var transportChecks int
+	withFakeRecoveryTransport(t, nil, &transportChecks)
+
+	devServer := &fakeRestartDevServer{port: freePort(t), name: "Expo"}
+	m := managerWithRecoverableDevServer(devServer)
+
+	recovered := m.handleRuntimeFailure(context.Background(), RuntimeFailure{
+		Kind:   RuntimeFailureLocalDevServerDown,
+		Port:   devServer.port,
+		Detail: fmt.Sprintf("failed to connect to local websocket: dial tcp 127.0.0.1:%d: connect: connection refused", devServer.port),
+		Fatal:  true,
+	})
+	if !recovered {
+		t.Fatal("expected relay local connection refusal to recover")
+	}
+	if devServer.stops != 1 || devServer.starts != 1 {
+		t.Fatalf("restart counts stop/start = %d/%d, want 1/1", devServer.stops, devServer.starts)
+	}
+	if transportChecks != 1 {
+		t.Fatalf("transport checks = %d, want 1", transportChecks)
+	}
+	assertNoRuntimeFailure(t, m.Failures())
+}
+
+func TestManagerSecondLocalDevServerFailureEmitsFatal(t *testing.T) {
+	withFakeRecoveryTransport(t, nil, nil)
+
+	devServer := &fakeRestartDevServer{port: freePort(t), name: "Expo"}
+	m := managerWithRecoverableDevServer(devServer)
+
+	if recovered := m.handleRuntimeFailure(context.Background(), RuntimeFailure{
+		Kind:  RuntimeFailureLocalDevServerDown,
+		Port:  devServer.port,
+		Fatal: true,
+	}); !recovered {
+		t.Fatal("expected first local failure to recover")
+	}
+
+	recovered := m.handleRuntimeFailure(context.Background(), RuntimeFailure{
+		Kind:   RuntimeFailureLocalDevServerDown,
+		Port:   devServer.port,
+		Detail: "local dev server failed again",
+		Fatal:  true,
+	})
+	if recovered {
+		t.Fatal("expected second local failure to remain fatal")
+	}
+	failure := readRuntimeFailure(t, m.Failures())
+	if failure.Kind != RuntimeFailureLocalDevServerDown || !failure.Fatal {
+		t.Fatalf("failure = %+v, want fatal local dev server down", failure)
+	}
+	if !strings.Contains(failure.Detail, "restart already attempted") {
+		t.Fatalf("failure detail = %q, want restart already attempted", failure.Detail)
+	}
+}
+
+func TestManagerRestartFailureEmitsFatalWithDetail(t *testing.T) {
+	devServer := &fakeRestartDevServer{
+		port:     freePort(t),
+		name:     "Expo",
+		startErr: errors.New("npx exploded"),
+	}
+	m := managerWithRecoverableDevServer(devServer)
+
+	recovered := m.handleRuntimeFailure(context.Background(), RuntimeFailure{
+		Kind:   RuntimeFailureLocalDevServerDown,
+		Port:   devServer.port,
+		Detail: "local dev server stopped",
+		Fatal:  true,
+	})
+	if recovered {
+		t.Fatal("expected restart failure to emit fatal failure")
+	}
+	failure := readRuntimeFailure(t, m.Failures())
+	if failure.Kind != RuntimeFailureLocalDevServerDown || !failure.Fatal {
+		t.Fatalf("failure = %+v, want fatal local dev server down", failure)
+	}
+	if !strings.Contains(failure.Detail, "failed to restart local dev server") {
+		t.Fatalf("failure detail = %q, want restart failure detail", failure.Detail)
+	}
+}
+
+func TestManagerWarningFailuresDoNotRestartDevServer(t *testing.T) {
+	devServer := &fakeRestartDevServer{port: 8081, name: "Expo"}
+	m := managerWithRecoverableDevServer(devServer)
+
+	recovered := m.handleRuntimeFailure(context.Background(), RuntimeFailure{
+		Kind:   RuntimeFailureMetro500,
+		Port:   8081,
+		Detail: "Metro health: status 500",
+		Fatal:  false,
+	})
+	if recovered {
+		t.Fatal("warning-only failure should not recover")
+	}
+	if devServer.starts != 0 || devServer.stops != 0 {
+		t.Fatalf("restart counts stop/start = %d/%d, want 0/0", devServer.stops, devServer.starts)
+	}
+	failure := readRuntimeFailure(t, m.Failures())
+	if failure.Fatal {
+		t.Fatal("expected warning-only failure to remain non-fatal")
+	}
+}
+
+func TestManagerSuppressesStaleLocalFailureWhenMetroRecovered(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/status" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	devServer := &fakeRestartDevServer{port: testServerPort(t, srv), name: "Expo"}
+	m := managerWithRecoverableDevServer(devServer)
+
+	recovered := m.handleRuntimeFailure(context.Background(), RuntimeFailure{
+		Kind:   RuntimeFailureLocalDevServerDown,
+		Port:   devServer.port,
+		Detail: "stale relay connection refused",
+		Fatal:  true,
+	})
+	if !recovered {
+		t.Fatal("expected stale local failure to be suppressed")
+	}
+	if devServer.starts != 0 || devServer.stops != 0 {
+		t.Fatalf("restart counts stop/start = %d/%d, want 0/0", devServer.stops, devServer.starts)
+	}
+	if m.localRecoveryAttempted {
+		t.Fatal("stale local failure should not consume the recovery attempt")
+	}
+	assertNoRuntimeFailure(t, m.Failures())
+}
+
+func TestManagerRecoveryPathsAreSerialized(t *testing.T) {
+	withFakeRecoveryTransport(t, nil, nil)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/status" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	devServer := &fakeRestartDevServer{port: testServerPort(t, srv), name: "Expo"}
+	tunnel := &blockingRecoveringTunnelBackend{
+		fakeRecoveringTunnelBackend: fakeRecoveringTunnelBackend{
+			publicURL: "https://old-relay.example",
+			relayID:   "a-old",
+			transport: "relay",
+		},
+		started: make(chan struct{}),
+		unblock: make(chan struct{}),
+	}
+	m := NewManager("expo", &config.ProviderConfig{AppScheme: "myapp"}, ".")
+	m.devServer = devServer
+	m.tunnel = tunnel
+	m.running = true
+	m.ctx = context.Background()
+
+	relayDone := make(chan error, 1)
+	go func() {
+		_, err := m.RecoverRelay(context.Background())
+		relayDone <- err
+	}()
+
+	select {
+	case <-tunnel.started:
+	case <-time.After(time.Second):
+		t.Fatal("relay recovery did not start")
+	}
+
+	localDone := make(chan bool, 1)
+	go func() {
+		localDone <- m.handleRuntimeFailure(context.Background(), RuntimeFailure{
+			Kind:   RuntimeFailureLocalDevServerDown,
+			Port:   devServer.port,
+			Detail: "stale local failure during relay recovery",
+			Fatal:  true,
+		})
+	}()
+
+	select {
+	case <-localDone:
+		t.Fatal("local recovery returned while relay recovery held the recovery mutex")
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	close(tunnel.unblock)
+	select {
+	case err := <-relayDone:
+		if err != nil {
+			t.Fatalf("RecoverRelay() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("relay recovery did not finish")
+	}
+	select {
+	case recovered := <-localDone:
+		if !recovered {
+			t.Fatal("expected stale local failure to be suppressed after relay recovery")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("local recovery did not finish")
+	}
+	if devServer.stops != 1 || devServer.starts != 1 {
+		t.Fatalf("restart counts stop/start = %d/%d, want relay recovery restart only", devServer.stops, devServer.starts)
+	}
+	if m.localRecoveryAttempted {
+		t.Fatal("stale local failure should not consume local recovery after relay recovery")
+	}
+	assertNoRuntimeFailure(t, m.Failures())
+}
+
+func TestManagerRecoverRelayReacquiresAndRestartsDevServer(t *testing.T) {
+	var transportChecks int
+	withFakeRecoveryTransport(t, nil, &transportChecks)
+
+	devServer := &fakeRestartDevServer{port: 8081, name: "Expo"}
+	tunnel := &fakeRecoveringTunnelBackend{
+		publicURL: "https://old-relay.example",
+		relayID:   "a-old",
+		transport: "relay",
+	}
+	m := NewManager("expo", &config.ProviderConfig{AppScheme: "myapp"}, ".")
+	m.devServer = devServer
+	m.tunnel = tunnel
+	m.running = true
+	m.ctx = context.Background()
+
+	result, err := m.RecoverRelay(context.Background())
+	if err != nil {
+		t.Fatalf("RecoverRelay() error = %v", err)
+	}
+	if tunnel.reacquires != 1 {
+		t.Fatalf("reacquires = %d, want 1", tunnel.reacquires)
+	}
+	if devServer.proxyURL != "https://new-relay.example" {
+		t.Fatalf("proxyURL = %q, want replacement relay", devServer.proxyURL)
+	}
+	if devServer.stops != 1 || devServer.starts != 1 {
+		t.Fatalf("restart counts stop/start = %d/%d, want 1/1", devServer.stops, devServer.starts)
+	}
+	if transportChecks != 1 {
+		t.Fatalf("transport checks = %d, want 1", transportChecks)
+	}
+	if result.TunnelURL != "https://new-relay.example" || result.RelayID != "a-new" {
+		t.Fatalf("result = %+v, want new relay URL/id", result)
+	}
+	if result.DeepLinkURL != "deep://https://new-relay.example" {
+		t.Fatalf("DeepLinkURL = %q, want derived from replacement relay", result.DeepLinkURL)
+	}
+}
+
+func TestManagerRecoverRelayOnlyAttemptsOnce(t *testing.T) {
+	withFakeRecoveryTransport(t, nil, nil)
+
+	devServer := &fakeRestartDevServer{port: 8081, name: "Expo"}
+	tunnel := &fakeRecoveringTunnelBackend{publicURL: "https://old-relay.example", relayID: "a-old"}
+	m := NewManager("expo", &config.ProviderConfig{AppScheme: "myapp"}, ".")
+	m.devServer = devServer
+	m.tunnel = tunnel
+	m.running = true
+	m.ctx = context.Background()
+
+	if _, err := m.RecoverRelay(context.Background()); err != nil {
+		t.Fatalf("first RecoverRelay() error = %v", err)
+	}
+	if _, err := m.RecoverRelay(context.Background()); err == nil {
+		t.Fatal("expected second RecoverRelay() to fail")
+	}
+	if tunnel.reacquires != 1 {
+		t.Fatalf("reacquires = %d, want 1", tunnel.reacquires)
+	}
+}
+
+func TestManagerRecoverRelayFailureReturnsError(t *testing.T) {
+	devServer := &fakeRestartDevServer{port: 8081, name: "Expo"}
+	tunnel := &fakeRecoveringTunnelBackend{
+		publicURL:    "https://old-relay.example",
+		relayID:      "a-old",
+		reacquireErr: errors.New("relay create failed"),
+	}
+	m := NewManager("expo", &config.ProviderConfig{AppScheme: "myapp"}, ".")
+	m.devServer = devServer
+	m.tunnel = tunnel
+	m.running = true
+	m.ctx = context.Background()
+
+	if _, err := m.RecoverRelay(context.Background()); err == nil || !strings.Contains(err.Error(), "relay create failed") {
+		t.Fatalf("RecoverRelay() error = %v, want relay create failed", err)
+	}
+	if devServer.starts != 0 || devServer.stops != 0 {
+		t.Fatalf("restart counts stop/start = %d/%d, want 0/0", devServer.stops, devServer.starts)
+	}
+}
+
+func TestManagerRuntimeFailureDedupeCollapsesRepeatedDevtoolsNoise(t *testing.T) {
+	oldWindow := runtimeFailureDedupWindow
+	runtimeFailureDedupWindow = time.Minute
+	t.Cleanup(func() {
+		runtimeFailureDedupWindow = oldWindow
+	})
+
+	m := NewManager("expo", &config.ProviderConfig{AppScheme: "myapp"}, ".")
+	m.emitRuntimeFailure(RuntimeFailure{
+		Kind:   RuntimeFailureLocalDevServerDown,
+		Port:   8081,
+		Detail: "failed to connect to /expo-dev-plugins/broadcast",
+		Fatal:  true,
+	})
+	m.emitRuntimeFailure(RuntimeFailure{
+		Kind:   RuntimeFailureLocalDevServerDown,
+		Port:   8081,
+		Detail: "failed to connect to /inspector/device",
+		Fatal:  true,
+	})
+
+	_ = readRuntimeFailure(t, m.Failures())
+	select {
+	case extra := <-m.Failures():
+		t.Fatalf("unexpected duplicate failure: %+v", extra)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestManagerRuntimeFailureDedupeDoesNotHideFatalAfterWarning(t *testing.T) {
+	oldWindow := runtimeFailureDedupWindow
+	runtimeFailureDedupWindow = time.Minute
+	t.Cleanup(func() {
+		runtimeFailureDedupWindow = oldWindow
+	})
+
+	m := NewManager("expo", &config.ProviderConfig{AppScheme: "myapp"}, ".")
+	m.emitRuntimeFailure(RuntimeFailure{
+		Kind:   RuntimeFailureLocalDevServerDown,
+		Port:   8081,
+		Detail: "local dev server health check warning: timeout",
+		Fatal:  false,
+	})
+	m.emitRuntimeFailure(RuntimeFailure{
+		Kind:   RuntimeFailureLocalDevServerDown,
+		Port:   8081,
+		Detail: "local dev server health check failed: connection refused",
+		Fatal:  true,
+	})
+
+	warning := readRuntimeFailure(t, m.Failures())
+	if warning.Fatal {
+		t.Fatal("first failure should be warning-only")
+	}
+	fatal := readRuntimeFailure(t, m.Failures())
+	if !fatal.Fatal {
+		t.Fatal("fatal failure should not be deduped by earlier warning")
+	}
+}
+
+func TestManagerRuntimeFailureDedupePrunesExpiredKeys(t *testing.T) {
+	oldWindow := runtimeFailureDedupWindow
+	runtimeFailureDedupWindow = 10 * time.Millisecond
+	t.Cleanup(func() {
+		runtimeFailureDedupWindow = oldWindow
+	})
+
+	m := NewManager("expo", &config.ProviderConfig{AppScheme: "myapp"}, ".")
+	failure := RuntimeFailure{
+		Kind:   RuntimeFailureMetro500,
+		Port:   8081,
+		Detail: "Metro health: status 500",
+		Fatal:  false,
+	}
+	m.emitRuntimeFailure(failure)
+	_ = readRuntimeFailure(t, m.Failures())
+
+	time.Sleep(20 * time.Millisecond)
+	m.emitRuntimeFailure(failure)
+	_ = readRuntimeFailure(t, m.Failures())
+	if len(m.failureLast) > 1 {
+		t.Fatalf("failureLast len = %d, want bounded map after pruning", len(m.failureLast))
+	}
+}
+
+func TestManagerStopClearsRuntimeFailures(t *testing.T) {
+	m := NewManager("expo", &config.ProviderConfig{AppScheme: "myapp"}, ".")
+	m.emitRuntimeFailure(RuntimeFailure{
+		Kind:   RuntimeFailureMetro500,
+		Port:   8081,
+		Detail: "Metro health: status 500",
+		Fatal:  false,
+	})
+
+	m.Stop()
+
+	if len(m.failureLast) != 0 {
+		t.Fatalf("failureLast len = %d, want 0 after Stop", len(m.failureLast))
+	}
+	assertNoRuntimeFailure(t, m.Failures())
+}
+
+func TestManagerEmitRuntimeFailureInitializesNilDedupeState(t *testing.T) {
+	m := &Manager{}
+	m.emitRuntimeFailure(RuntimeFailure{
+		Kind:   RuntimeFailureMetro500,
+		Port:   8081,
+		Detail: "Metro health: status 500",
+		Fatal:  false,
+	})
+
+	failure := readRuntimeFailure(t, m.Failures())
+	if failure.Kind != RuntimeFailureMetro500 {
+		t.Fatalf("failure kind = %q, want %q", failure.Kind, RuntimeFailureMetro500)
+	}
+	if m.failureLast == nil {
+		t.Fatal("failureLast should be initialized")
+	}
+}
+
+func managerWithRecoverableDevServer(devServer DevServer) *Manager {
+	m := NewManager("expo", &config.ProviderConfig{AppScheme: "myapp"}, ".")
+	m.devServer = devServer
+	m.tunnel = &fakeTunnelBackend{publicURL: "https://relay.example"}
+	m.running = true
+	return m
+}
+
+func withFakeRecoveryTransport(t *testing.T, err error, called *int) {
+	t.Helper()
+	previous := waitForExpoMetroTransport
+	waitForExpoMetroTransport = func(
+		ctx context.Context,
+		localPort int,
+		tunnelURL string,
+		timeout time.Duration,
+		interval time.Duration,
+	) (*DiagnosticResult, error) {
+		if called != nil {
+			*called = *called + 1
+		}
+		if err != nil {
+			return &DiagnosticResult{AllPassed: false}, err
+		}
+		return &DiagnosticResult{AllPassed: true}, nil
+	}
+	t.Cleanup(func() {
+		waitForExpoMetroTransport = previous
+	})
+}
+
+func assertNoRuntimeFailure(t *testing.T, failures <-chan RuntimeFailure) {
+	t.Helper()
+	select {
+	case failure := <-failures:
+		t.Fatalf("unexpected runtime failure: %+v", failure)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func testServerPort(t *testing.T, srv *httptest.Server) int {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatalf("parse server URL: %v", err)
+	}
+	_, port, err := net.SplitHostPort(req.URL.Host)
+	if err != nil {
+		t.Fatalf("SplitHostPort(%q): %v", req.URL.Host, err)
+	}
+	var portInt int
+	if _, err := fmt.Sscanf(port, "%d", &portInt); err != nil {
+		t.Fatalf("parse port %q: %v", port, err)
+	}
+	return portInt
 }
 
 func TestManagerStartExternalUsesProvidedDeepLinkWithoutProviderConfig(t *testing.T) {

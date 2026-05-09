@@ -43,10 +43,13 @@ type BareRNDevServer struct {
 
 	cmd            *exec.Cmd
 	cancel         context.CancelFunc
+	processDone    chan error
+	stopping       bool
 	mu             sync.Mutex
 	ready          bool
 	outputCallback hotreload.DevServerOutputCallback
 	debugMode      bool
+	failureCh      chan hotreload.RuntimeFailure
 }
 
 // NewBareRNDevServer creates a new bare React Native development server instance.
@@ -62,8 +65,9 @@ func NewBareRNDevServer(workDir string, port int) *BareRNDevServer {
 		port = 8081
 	}
 	return &BareRNDevServer{
-		Port:    port,
-		WorkDir: workDir,
+		Port:      port,
+		WorkDir:   workDir,
+		failureCh: make(chan hotreload.RuntimeFailure, 4),
 	}
 }
 
@@ -125,6 +129,9 @@ func (b *BareRNDevServer) Start(ctx context.Context) error {
 	if err := b.cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start Metro bundler: %w", err)
 	}
+	b.stopping = false
+	b.processDone = make(chan error, 1)
+	go b.watchProcess(ctx, b.cmd, b.processDone)
 
 	readyChan := make(chan bool, 1)
 	errChan := make(chan error, 1)
@@ -170,6 +177,15 @@ func (b *BareRNDevServer) Start(ctx context.Context) error {
 	case err := <-errChan:
 		_ = b.stopLocked()
 		return err
+	case err := <-b.processDone:
+		b.ready = false
+		b.cmd = nil
+		b.processDone = nil
+		if b.cancel != nil {
+			b.cancel()
+			b.cancel = nil
+		}
+		return processExitError("Metro bundler exited before it became ready", err)
 	case <-time.After(90 * time.Second):
 		_ = b.stopLocked()
 		return fmt.Errorf("timeout waiting for Metro bundler to start (90s)")
@@ -191,6 +207,7 @@ func (b *BareRNDevServer) Stop() error {
 
 func (b *BareRNDevServer) stopLocked() error {
 	b.ready = false
+	b.stopping = true
 
 	if b.cancel != nil {
 		b.cancel()
@@ -200,25 +217,59 @@ func (b *BareRNDevServer) stopLocked() error {
 	if b.cmd != nil && b.cmd.Process != nil {
 		cmd := b.cmd
 		pid := cmd.Process.Pid
+		done := b.processDone
 
 		killProcessGroup(pid)
 
-		done := make(chan error, 1)
-		go func() {
-			done <- cmd.Wait()
-		}()
-
-		select {
-		case <-done:
-		case <-time.After(2 * time.Second):
-			forceKillProcessGroup(pid)
-			<-time.After(500 * time.Millisecond)
+		if done != nil {
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				forceKillProcessGroup(pid)
+				<-time.After(500 * time.Millisecond)
+			}
 		}
 
 		b.cmd = nil
+		b.processDone = nil
 	}
 
 	return nil
+}
+
+func (b *BareRNDevServer) watchProcess(ctx context.Context, cmd *exec.Cmd, done chan<- error) {
+	err := cmd.Wait()
+	done <- err
+
+	b.mu.Lock()
+	shouldReport := b.ready && !b.stopping && b.cmd == cmd && ctx.Err() == nil
+	port := b.Port
+	b.mu.Unlock()
+	if !shouldReport {
+		return
+	}
+	b.emitFailure(hotreload.RuntimeFailure{
+		Kind:     hotreload.RuntimeFailureLocalDevServerDown,
+		Provider: b.Name(),
+		Port:     port,
+		Detail:   processExitDetail("Metro bundler exited unexpectedly", err),
+		Fatal:    true,
+		Err:      err,
+	})
+}
+
+func (b *BareRNDevServer) Failures() <-chan hotreload.RuntimeFailure {
+	return b.failureCh
+}
+
+func (b *BareRNDevServer) emitFailure(f hotreload.RuntimeFailure) {
+	if b.failureCh == nil {
+		return
+	}
+	select {
+	case b.failureCh <- f:
+	default:
+	}
 }
 
 // GetPort returns the port the Metro bundler is listening on.

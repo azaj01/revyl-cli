@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -18,10 +20,13 @@ import (
 	"github.com/revyl/cli/internal/api"
 )
 
-const (
-	relayChunkSize        = 32 * 1024
-	relayHeartbeatEvery   = 30 * time.Second
-	relayReconnectBackoff = 2 * time.Second
+const relayChunkSize = 32 * 1024
+
+var (
+	relayHeartbeatEvery               = 30 * time.Second
+	relayReconnectBackoff             = 2 * time.Second
+	relayHeartbeatFailuresBeforeFatal = 5
+	relayReconnectFailureTimeout      = 90 * time.Second
 )
 
 var relayHopByHopHeaders = map[string]bool{
@@ -109,8 +114,10 @@ type relayRuntime struct {
 	httpStreams map[string]*relayHTTPStream
 	wsStreams   map[string]*relayWSStream
 
-	disconnectOnce sync.Once
-	onDisconnect   func(error)
+	disconnectOnce  sync.Once
+	intentionalStop atomic.Bool
+	onDisconnect    func(error)
+	onFailure       func(RuntimeFailure)
 }
 
 func newRelayRuntime(
@@ -120,6 +127,7 @@ func newRelayRuntime(
 	traceClient *api.Client,
 	onLog func(string),
 	onDisconnect func(error),
+	onFailure func(RuntimeFailure),
 ) *relayRuntime {
 	ctx, cancel := context.WithCancel(parent)
 	return &relayRuntime{
@@ -130,6 +138,7 @@ func newRelayRuntime(
 		traceClient:  traceClient,
 		onLog:        onLog,
 		onDisconnect: onDisconnect,
+		onFailure:    onFailure,
 		httpClient: &http.Client{
 			Transport: &http.Transport{
 				Proxy:               http.ProxyFromEnvironment,
@@ -159,6 +168,7 @@ func (r *relayRuntime) start() {
 }
 
 func (r *relayRuntime) stop() {
+	r.intentionalStop.Store(true)
 	r.cancel()
 	_ = r.conn.Close()
 
@@ -197,11 +207,24 @@ func (r *relayRuntime) readLoop() {
 }
 
 func (r *relayRuntime) signalDisconnect(err error) {
+	if r.intentionalStop.Load() {
+		return
+	}
 	r.disconnectOnce.Do(func() {
 		if r.onDisconnect != nil {
 			r.onDisconnect(err)
 		}
 	})
+}
+
+func (r *relayRuntime) signalFailure(f RuntimeFailure) {
+	if r.onFailure == nil {
+		return
+	}
+	if f.Port == 0 {
+		f.Port = r.localPort
+	}
+	r.onFailure(f)
 }
 
 func (r *relayRuntime) sendEnvelope(env relayEnvelope) error {
@@ -280,6 +303,15 @@ func (r *relayRuntime) handleHTTPRequestStart(env relayEnvelope) {
 		resp, err := r.httpClient.Do(req)
 		if err != nil {
 			errorMessage = fmt.Sprintf("local dev server request failed: %v", err)
+			if isLocalConnectionRefused(err) {
+				r.signalFailure(RuntimeFailure{
+					Kind:   RuntimeFailureLocalDevServerDown,
+					Port:   r.localPort,
+					Detail: errorMessage,
+					Fatal:  true,
+					Err:    err,
+				})
+			}
 			_ = r.sendEnvelope(relayEnvelope{
 				Kind:     "stream.error",
 				StreamID: env.StreamID,
@@ -290,6 +322,14 @@ func (r *relayRuntime) handleHTTPRequestStart(env relayEnvelope) {
 		defer resp.Body.Close()
 		statusCode = resp.StatusCode
 		ttfb = time.Since(startedAt)
+		if resp.StatusCode >= http.StatusInternalServerError {
+			r.signalFailure(RuntimeFailure{
+				Kind:   RuntimeFailureMetro500,
+				Port:   r.localPort,
+				Detail: fmt.Sprintf("Metro returned HTTP %d for %s", resp.StatusCode, env.Path),
+				Fatal:  false,
+			})
+		}
 
 		if err := r.sendEnvelope(relayEnvelope{
 			Kind:     "http.response.start",
@@ -407,6 +447,15 @@ func (r *relayRuntime) handleWSStart(env relayEnvelope) {
 	dialer := websocket.Dialer{HandshakeTimeout: 30 * time.Second}
 	localConn, _, err := dialer.DialContext(r.ctx, targetURL.String(), relayHeadersToHTTP(env.Headers))
 	if err != nil {
+		if isLocalConnectionRefused(err) {
+			r.signalFailure(RuntimeFailure{
+				Kind:   RuntimeFailureLocalDevServerDown,
+				Port:   r.localPort,
+				Detail: fmt.Sprintf("failed to connect to local websocket: %v", err),
+				Fatal:  true,
+				Err:    err,
+			})
+		}
 		_ = r.sendEnvelope(relayEnvelope{
 			Kind:     "stream.error",
 			StreamID: env.StreamID,
@@ -566,15 +615,20 @@ type RelayTunnelBackend struct {
 	client   *api.Client
 	provider string
 
-	mu           sync.Mutex
-	session      *api.HotReloadRelaySession
-	runtime      *relayRuntime
-	localPort    int
-	cancel       context.CancelFunc
-	healthCancel context.CancelFunc
-	onLog        func(string)
-	stopped      bool
-	disconnects  chan error
+	mu              sync.Mutex
+	connectMu       sync.Mutex
+	session         *api.HotReloadRelaySession
+	runtime         *relayRuntime
+	localPort       int
+	runCtx          context.Context
+	cancel          context.CancelFunc
+	healthCtx       context.Context
+	healthCancel    context.CancelFunc
+	heartbeatCancel context.CancelFunc
+	onLog           func(string)
+	failures        chan RuntimeFailure
+	stopped         bool
+	disconnects     chan error
 }
 
 // NewRelayTunnelBackend creates a backend-owned relay transport.
@@ -583,6 +637,7 @@ func NewRelayTunnelBackend(client *api.Client, provider string) TunnelBackend {
 		client:      client,
 		provider:    provider,
 		disconnects: make(chan error, 4),
+		failures:    make(chan RuntimeFailure, 16),
 	}
 }
 
@@ -599,6 +654,30 @@ func (r *RelayTunnelBackend) log(format string, args ...interface{}) {
 	r.mu.Unlock()
 	if cb != nil {
 		cb(fmt.Sprintf(format, args...))
+	}
+}
+
+func (r *RelayTunnelBackend) Failures() <-chan RuntimeFailure {
+	return r.failures
+}
+
+func (r *RelayTunnelBackend) emitFailure(f RuntimeFailure) {
+	r.mu.Lock()
+	provider := r.provider
+	localPort := r.localPort
+	relayID := ""
+	if r.session != nil {
+		relayID = r.session.RelayID
+	}
+	r.mu.Unlock()
+
+	f = f.WithDefaults(provider, localPort, relayID)
+	if f.Kind == "" {
+		return
+	}
+	select {
+	case r.failures <- f:
+	default:
 	}
 }
 
@@ -634,6 +713,7 @@ func (r *RelayTunnelBackend) Start(ctx context.Context, localPort int) (string, 
 	r.mu.Lock()
 	r.session = session
 	runCtx, cancel := context.WithCancel(ctx)
+	r.runCtx = runCtx
 	r.cancel = cancel
 	r.mu.Unlock()
 
@@ -642,6 +722,7 @@ func (r *RelayTunnelBackend) Start(ctx context.Context, localPort int) (string, 
 		_ = r.revokeRelaySession(context.Background(), session.RelayID)
 		r.mu.Lock()
 		r.session = nil
+		r.runCtx = nil
 		r.cancel = nil
 		r.mu.Unlock()
 		return "", err
@@ -677,6 +758,9 @@ func (r *RelayTunnelBackend) revokeRelaySession(ctx context.Context, relayID str
 }
 
 func (r *RelayTunnelBackend) connectRuntime(ctx context.Context, localPort int) error {
+	r.connectMu.Lock()
+	defer r.connectMu.Unlock()
+
 	r.mu.Lock()
 	session := r.session
 	r.mu.Unlock()
@@ -707,6 +791,8 @@ func (r *RelayTunnelBackend) connectRuntime(ctx context.Context, localPort int) 
 		case r.disconnects <- err:
 		default:
 		}
+	}, func(f RuntimeFailure) {
+		r.emitFailure(f)
 	})
 	runtime.start()
 
@@ -721,6 +807,69 @@ func (r *RelayTunnelBackend) connectRuntime(ctx context.Context, localPort int) 
 	return nil
 }
 
+// Reacquire creates and connects a replacement relay session for the same local port.
+func (r *RelayTunnelBackend) Reacquire(ctx context.Context) (*RelayReacquireResult, error) {
+	r.mu.Lock()
+	oldSession := r.session
+	localPort := r.localPort
+	runCtx := r.runCtx
+	stopped := r.stopped
+	r.mu.Unlock()
+
+	if stopped {
+		return nil, fmt.Errorf("relay backend is stopped")
+	}
+	if oldSession == nil {
+		return nil, fmt.Errorf("relay session is not initialized")
+	}
+	if localPort <= 0 {
+		return nil, fmt.Errorf("local dev server port is not configured")
+	}
+
+	session, err := r.createRelaySession(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	r.mu.Lock()
+	if r.stopped {
+		r.mu.Unlock()
+		_ = r.revokeRelaySession(context.Background(), session.RelayID)
+		return nil, fmt.Errorf("relay backend stopped during recovery")
+	}
+	r.session = session
+	if runCtx == nil {
+		runCtx = ctx
+		r.runCtx = ctx
+	}
+	r.mu.Unlock()
+
+	if err := r.connectRuntime(runCtx, localPort); err != nil {
+		_ = r.revokeRelaySession(context.Background(), session.RelayID)
+		r.mu.Lock()
+		r.session = oldSession
+		r.mu.Unlock()
+		return nil, fmt.Errorf("failed to connect replacement relay websocket: %w", err)
+	}
+
+	r.restartHeartbeatMonitor()
+	if oldSession != nil && strings.TrimSpace(oldSession.RelayID) != "" && oldSession.RelayID != session.RelayID {
+		if err := r.revokeRelaySession(context.Background(), oldSession.RelayID); err != nil {
+			r.log("[relay] old relay revoke skipped after recovery: %v", err)
+		}
+	}
+
+	transport := strings.TrimSpace(session.Transport)
+	if transport == "" {
+		transport = "relay"
+	}
+	return &RelayReacquireResult{
+		TunnelURL: session.PublicURL,
+		RelayID:   session.RelayID,
+		Transport: transport,
+	}, nil
+}
+
 // StartHealthMonitor starts relay heartbeat and reconnect monitors.
 func (r *RelayTunnelBackend) StartHealthMonitor(ctx context.Context) {
 	r.mu.Lock()
@@ -729,17 +878,42 @@ func (r *RelayTunnelBackend) StartHealthMonitor(ctx context.Context) {
 		return
 	}
 	monitorCtx, cancel := context.WithCancel(ctx)
+	heartbeatCtx, heartbeatCancel := context.WithCancel(monitorCtx)
+	r.healthCtx = monitorCtx
 	r.healthCancel = cancel
+	r.heartbeatCancel = heartbeatCancel
 	r.mu.Unlock()
 
-	go r.heartbeatLoop(monitorCtx)
+	go r.heartbeatLoop(heartbeatCtx)
 	go r.reconnectLoop(monitorCtx)
+}
+
+func (r *RelayTunnelBackend) restartHeartbeatMonitor() {
+	r.mu.Lock()
+	monitorCtx := r.healthCtx
+	stopped := r.stopped
+	hasSession := r.session != nil
+	if r.heartbeatCancel != nil {
+		r.heartbeatCancel()
+		r.heartbeatCancel = nil
+	}
+	if monitorCtx == nil || stopped || !hasSession {
+		r.mu.Unlock()
+		return
+	}
+	heartbeatCtx, heartbeatCancel := context.WithCancel(monitorCtx)
+	r.heartbeatCancel = heartbeatCancel
+	r.mu.Unlock()
+
+	go r.heartbeatLoop(heartbeatCtx)
 }
 
 func (r *RelayTunnelBackend) heartbeatLoop(ctx context.Context) {
 	ticker := time.NewTicker(relayHeartbeatEvery)
 	defer ticker.Stop()
 
+	consecutiveFailures := 0
+	var inactiveSince time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -752,9 +926,53 @@ func (r *RelayTunnelBackend) heartbeatLoop(ctx context.Context) {
 			if stopped || session == nil {
 				return
 			}
-			if _, err := r.heartbeatRelaySession(ctx, session.RelayID); err != nil {
+			status, err := r.heartbeatRelaySession(ctx, session.RelayID)
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
 				r.log("[relay] heartbeat failed: %v", err)
+				consecutiveFailures++
+				if isRelayNotFoundError(err) {
+					r.emitFailure(RuntimeFailure{
+						Kind:    RuntimeFailureRelayLeaseExpired,
+						RelayID: session.RelayID,
+						Detail:  fmt.Sprintf("relay %s no longer exists", session.RelayID),
+						Fatal:   true,
+						Err:     err,
+					})
+					return
+				}
+				if consecutiveFailures >= relayHeartbeatFailuresBeforeFatal {
+					r.emitFailure(RuntimeFailure{
+						Kind:    RuntimeFailureRelayUnreachable,
+						RelayID: session.RelayID,
+						Detail:  fmt.Sprintf("relay heartbeat failed %d times in a row: %v", consecutiveFailures, err),
+						Fatal:   true,
+						Err:     err,
+					})
+					return
+				}
+				continue
 			}
+			consecutiveFailures = 0
+			if status != nil && !status.Active {
+				if inactiveSince.IsZero() {
+					inactiveSince = time.Now()
+					continue
+				}
+				if time.Since(inactiveSince) >= relayReconnectFailureTimeout {
+					r.emitFailure(RuntimeFailure{
+						Kind:    RuntimeFailureRelayUnreachable,
+						RelayID: session.RelayID,
+						Detail:  fmt.Sprintf("relay %s has no active CLI connection", session.RelayID),
+						Fatal:   true,
+					})
+					return
+				}
+				continue
+			}
+			inactiveSince = time.Time{}
 		}
 	}
 }
@@ -773,22 +991,62 @@ func (r *RelayTunnelBackend) reconnectLoop(ctx context.Context) {
 			if stopped || session == nil {
 				return
 			}
+			relayID := session.RelayID
 			r.log("[relay] connection lost: %v", err)
+			reconnectStarted := time.Now()
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case <-time.After(relayReconnectBackoff):
 				}
+				if !r.currentRelayMatches(relayID) {
+					r.log("[relay] skipping stale reconnect for relay id=%s", relayID)
+					break
+				}
 				if err := r.connectRuntime(ctx, localPort); err != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					if !r.currentRelayMatches(relayID) {
+						r.log("[relay] skipping stale reconnect failure for relay id=%s", relayID)
+						break
+					}
 					r.log("[relay] reconnect failed: %v", err)
+					if time.Since(reconnectStarted) >= relayReconnectFailureTimeout {
+						r.emitFailure(RuntimeFailure{
+							Kind:    RuntimeFailureRelayUnreachable,
+							RelayID: relayID,
+							Detail:  fmt.Sprintf("relay reconnect failed for %s: %v", relayReconnectFailureTimeout, err),
+							Fatal:   true,
+							Err:     err,
+						})
+						return
+					}
 					continue
 				}
-				r.log("[relay] reconnected to backend relay id=%s transport=relay", session.RelayID)
+				currentRelayID := r.currentRelayID()
+				if currentRelayID == "" {
+					currentRelayID = relayID
+				}
+				r.log("[relay] reconnected to backend relay id=%s transport=relay", currentRelayID)
 				break
 			}
 		}
 	}
+}
+
+func (r *RelayTunnelBackend) currentRelayID() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.session == nil {
+		return ""
+	}
+	return r.session.RelayID
+}
+
+func (r *RelayTunnelBackend) currentRelayMatches(relayID string) bool {
+	return r.currentRelayID() == relayID
 }
 
 // Stop tears down the relay session and websocket connection.
@@ -799,12 +1057,19 @@ func (r *RelayTunnelBackend) Stop() error {
 	session := r.session
 	cancel := r.cancel
 	healthCancel := r.healthCancel
+	heartbeatCancel := r.heartbeatCancel
 	r.runtime = nil
 	r.session = nil
+	r.runCtx = nil
 	r.cancel = nil
+	r.healthCtx = nil
 	r.healthCancel = nil
+	r.heartbeatCancel = nil
 	r.mu.Unlock()
 
+	if heartbeatCancel != nil {
+		heartbeatCancel()
+	}
 	if healthCancel != nil {
 		healthCancel()
 	}
@@ -820,6 +1085,15 @@ func (r *RelayTunnelBackend) Stop() error {
 		}
 	}
 	return nil
+}
+
+func isRelayNotFoundError(err error) bool {
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode == http.StatusNotFound
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not found") || strings.Contains(msg, "404")
 }
 
 // PublicURL returns the current relay URL.

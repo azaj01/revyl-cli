@@ -981,16 +981,9 @@ func runDevStart(cmd *cobra.Command, args []string) error {
 			"bundle_id": bundleID,
 		}
 		if provider.Name() == "react-native" && devicePlatform == "ios" {
-			if parsed, err := url.Parse(startResult.TunnelURL); err == nil {
-				host := parsed.Hostname()
-				port := parsed.Port()
-				if port == "" && parsed.Scheme == "https" {
-					port = "443"
-				} else if port == "" {
-					port = "80"
-				}
-				launchPayload["packager_host"] = host + ":" + port
-				launchPayload["packager_scheme"] = parsed.Scheme
+			if host, scheme := metroPackagerAddressFromTunnelURL(startResult.TunnelURL); host != "" {
+				launchPayload["packager_host"] = host
+				launchPayload["packager_scheme"] = scheme
 			}
 		}
 		launchStarted := debugDevActionRequest("launch", session.Index, launchPayload)
@@ -1071,17 +1064,7 @@ func runDevStart(cmd *cobra.Command, args []string) error {
 	hrPackagerHost := ""
 	hrPackagerScheme := ""
 	if isBareRN && devicePlatform == "ios" {
-		if parsed, pErr := url.Parse(startResult.TunnelURL); pErr == nil {
-			host := parsed.Hostname()
-			port := parsed.Port()
-			if port == "" && parsed.Scheme == "https" {
-				port = "443"
-			} else if port == "" {
-				port = "80"
-			}
-			hrPackagerHost = host + ":" + port
-			hrPackagerScheme = parsed.Scheme
-		}
+		hrPackagerHost, hrPackagerScheme = metroPackagerAddressFromTunnelURL(startResult.TunnelURL)
 	}
 
 	if openBrowser {
@@ -1171,6 +1154,7 @@ func runDevStart(cmd *cobra.Command, args []string) error {
 	defer restoreTerminal()
 	ticker := time.NewTicker(defaultDevSessionPollInterval)
 	defer ticker.Stop()
+	runtimeFailures := manager.Failures()
 
 	var lastRebuildStart time.Time
 	for {
@@ -1178,12 +1162,53 @@ func runDevStart(cmd *cobra.Command, args []string) error {
 		select {
 		case <-ctx.Done():
 			return nil
+		case failure := <-runtimeFailures:
+			if failure.Fatal {
+				if failure.Kind == hotreload.RuntimeFailureRelayLeaseExpired {
+					recovered, recoverErr := recoverHotReloadRelayForDevLoop(
+						ctx,
+						manager,
+						deviceMgr,
+						session.Index,
+						provider.Name(),
+						devicePlatform,
+						bundleID,
+					)
+					if recoverErr == nil {
+						startResult = recovered
+						devCtx.TunnelURL = recovered.TunnelURL
+						devCtx.DeepLinkURL = recovered.DeepLinkURL
+						devCtx.Transport = recovered.Transport
+						devCtx.RelayID = recovered.RelayID
+						devCtx.Port = recovered.DevServerPort
+						devCtx.LastActivity = time.Now()
+						_ = saveDevContext(cwd, devCtx)
+						updateDevStatusHotReloadURLs(hrStatusPath, recovered)
+						if isBareRN && devicePlatform == "ios" {
+							hrPackagerHost, hrPackagerScheme = metroPackagerAddressFromTunnelURL(recovered.TunnelURL)
+						}
+						ui.PrintSuccess("Hot reload relay recovered")
+						continue
+					}
+					failure.Detail = appendRuntimeFailureDetail(failure.Detail, fmt.Sprintf("relay recovery failed: %v", recoverErr))
+				}
+				msg := formatHotReloadRuntimeFailure(failure)
+				cancel()
+				return fmt.Errorf("%s", msg)
+			}
+			msg := formatHotReloadRuntimeFailure(failure)
+			ui.PrintWarning("%s", msg)
+			continue
 		case <-ticker.C:
 			checkCtx, checkCancel := context.WithTimeout(ctx, 5*time.Second)
 			alive, reason := deviceMgr.CheckSessionAlive(checkCtx, session)
 			checkCancel()
 			if !alive {
-				ui.PrintWarning("Device session ended (%s). Stopping dev session...", reason)
+				ui.PrintWarning("%s", formatHotReloadRuntimeFailure(hotreload.RuntimeFailure{
+					Kind:   hotreload.RuntimeFailureDeviceSessionEnded,
+					Detail: reason,
+					Fatal:  false,
+				}))
 				cancel()
 				return nil
 			}
@@ -1362,6 +1387,128 @@ func printHotReloadReady(providerDisplay string, startResult *hotreload.StartRes
 	}
 	if startResult.TunnelURL != "" {
 		ui.PrintDebug("  tunnel: %s", startResult.TunnelURL)
+	}
+}
+
+func formatHotReloadRuntimeFailure(f hotreload.RuntimeFailure) string {
+	parts := []string{f.Message()}
+	if strings.TrimSpace(f.Detail) != "" {
+		parts = append(parts, f.Detail)
+	}
+	if strings.TrimSpace(f.Provider) != "" {
+		parts = append(parts, "provider="+f.Provider)
+	}
+	if f.Port > 0 {
+		parts = append(parts, fmt.Sprintf("port=%d", f.Port))
+	}
+	if strings.TrimSpace(f.RelayID) != "" {
+		parts = append(parts, "relay="+f.RelayID)
+	}
+	if hint := strings.TrimSpace(f.Hint()); hint != "" {
+		parts = append(parts, "hint: "+hint)
+	}
+	return strings.Join(parts, " | ")
+}
+
+func appendRuntimeFailureDetail(existing string, detail string) string {
+	existing = strings.TrimSpace(existing)
+	detail = strings.TrimSpace(detail)
+	if existing == "" {
+		return detail
+	}
+	if detail == "" || strings.Contains(existing, detail) {
+		return existing
+	}
+	return existing + "; " + detail
+}
+
+func metroPackagerAddressFromTunnelURL(rawURL string) (string, string) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "", ""
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return "", ""
+	}
+	port := parsed.Port()
+	if port == "" && parsed.Scheme == "https" {
+		port = "443"
+	} else if port == "" {
+		port = "80"
+	}
+	scheme := parsed.Scheme
+	if scheme == "" {
+		scheme = "https"
+	}
+	return host + ":" + port, scheme
+}
+
+func recoverHotReloadRelayForDevLoop(
+	ctx context.Context,
+	manager *hotreload.Manager,
+	requester workerSessionRequester,
+	sessionIndex int,
+	providerName string,
+	devicePlatform string,
+	bundleID string,
+) (*hotreload.StartResult, error) {
+	recovered, err := manager.RecoverRelay(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := retargetHotReloadDevice(ctx, requester, sessionIndex, providerName, devicePlatform, bundleID, recovered); err != nil {
+		return nil, err
+	}
+	return recovered, nil
+}
+
+func retargetHotReloadDevice(
+	ctx context.Context,
+	requester workerSessionRequester,
+	sessionIndex int,
+	providerName string,
+	devicePlatform string,
+	bundleID string,
+	recovered *hotreload.StartResult,
+) error {
+	if recovered == nil {
+		return fmt.Errorf("replacement relay result is empty")
+	}
+	switch strings.TrimSpace(providerName) {
+	case "expo":
+		deepLink := strings.TrimSpace(recovered.DeepLinkURL)
+		if deepLink == "" {
+			return fmt.Errorf("replacement Expo deep link is empty")
+		}
+		resp, err := requester.WorkerRequestForSession(ctx, sessionIndex, "/open_url", map[string]string{"url": deepLink})
+		if err != nil {
+			return err
+		}
+		return ensureWorkerActionSucceeded(resp, "open_url")
+	case "react-native":
+		if strings.TrimSpace(devicePlatform) != "ios" {
+			return fmt.Errorf("bare React Native relay re-acquire currently supports iOS only")
+		}
+		identifier := strings.TrimSpace(bundleID)
+		if identifier == "" {
+			return fmt.Errorf("bundle id is required to relaunch bare React Native after relay recovery")
+		}
+		packagerHost, packagerScheme := metroPackagerAddressFromTunnelURL(recovered.TunnelURL)
+		if packagerHost == "" {
+			return fmt.Errorf("replacement relay URL is not a valid Metro packager host")
+		}
+		resp, err := requester.WorkerRequestForSession(ctx, sessionIndex, "/launch", map[string]string{
+			"bundle_id":       identifier,
+			"packager_host":   packagerHost,
+			"packager_scheme": packagerScheme,
+		})
+		if err != nil {
+			return err
+		}
+		return ensureWorkerActionSucceeded(resp, "launch")
+	default:
+		return fmt.Errorf("relay re-acquire retarget is not supported for provider %q", providerName)
 	}
 }
 
@@ -3041,6 +3188,7 @@ type devStatus struct {
 	TunnelURL      string          `json:"tunnel_url,omitempty"`
 	DeepLinkURL    string          `json:"deep_link_url,omitempty"`
 	Transport      string          `json:"transport,omitempty"`
+	RelayID        string          `json:"relay_id,omitempty"`
 	DeltaCacheWarm bool            `json:"delta_cache_warm"`
 	RebuildCount   int             `json:"rebuild_count"`
 	LastRebuild    *devRebuildInfo `json:"last_rebuild,omitempty"`
@@ -3151,6 +3299,36 @@ func writeDevStatus(
 	tmp := statusPath + ".tmp"
 	if err := os.WriteFile(tmp, data, 0644); err != nil {
 		ui.PrintDim("  Failed to write dev status: %v", err)
+		return
+	}
+	_ = os.Rename(tmp, statusPath)
+}
+
+func updateDevStatusHotReloadURLs(statusPath string, result *hotreload.StartResult) {
+	if strings.TrimSpace(statusPath) == "" || result == nil {
+		return
+	}
+	data, err := os.ReadFile(statusPath)
+	if err != nil {
+		return
+	}
+	var ds devStatus
+	if err := json.Unmarshal(data, &ds); err != nil {
+		ui.PrintDim("  Failed to update dev status after relay recovery: %v", err)
+		return
+	}
+	ds.TunnelURL = strings.TrimSpace(result.TunnelURL)
+	ds.DeepLinkURL = strings.TrimSpace(result.DeepLinkURL)
+	ds.Transport = strings.TrimSpace(result.Transport)
+	ds.RelayID = strings.TrimSpace(result.RelayID)
+	out, err := json.MarshalIndent(ds, "", "  ")
+	if err != nil {
+		ui.PrintDim("  Failed to marshal dev status after relay recovery: %v", err)
+		return
+	}
+	tmp := statusPath + ".tmp"
+	if err := os.WriteFile(tmp, out, 0644); err != nil {
+		ui.PrintDim("  Failed to write dev status after relay recovery: %v", err)
 		return
 	}
 	_ = os.Rename(tmp, statusPath)
@@ -3366,6 +3544,7 @@ func buildDevStatusOutput(ctxName string, pid int, ctxMeta *DevContext, ds *devS
 	tunnelURL := ""
 	deepLinkURL := ""
 	transport := ""
+	relayID := ""
 	buildMode := ""
 	state := devContextStateRunning
 	deltaCacheWarm := false
@@ -3382,6 +3561,7 @@ func buildDevStatusOutput(ctxName string, pid int, ctxMeta *DevContext, ds *devS
 		tunnelURL = strings.TrimSpace(ctxMeta.TunnelURL)
 		deepLinkURL = strings.TrimSpace(ctxMeta.DeepLinkURL)
 		transport = strings.TrimSpace(ctxMeta.Transport)
+		relayID = strings.TrimSpace(ctxMeta.RelayID)
 		if strings.TrimSpace(ctxMeta.State) != "" {
 			state = ctxMeta.State
 		}
@@ -3405,6 +3585,9 @@ func buildDevStatusOutput(ctxName string, pid int, ctxMeta *DevContext, ds *devS
 		}
 		if strings.TrimSpace(ds.Transport) != "" {
 			transport = strings.TrimSpace(ds.Transport)
+		}
+		if strings.TrimSpace(ds.RelayID) != "" {
+			relayID = strings.TrimSpace(ds.RelayID)
 		}
 		if strings.TrimSpace(ds.BuildMode) != "" {
 			buildMode = strings.TrimSpace(ds.BuildMode)
@@ -3433,6 +3616,7 @@ func buildDevStatusOutput(ctxName string, pid int, ctxMeta *DevContext, ds *devS
 		"tunnel_url":               tunnelURL,
 		"deep_link_url":            deepLinkURL,
 		"transport":                transport,
+		"relay_id":                 relayID,
 		"build_mode":               buildMode,
 		"state":                    state,
 		"delta_cache_warm":         deltaCacheWarm,

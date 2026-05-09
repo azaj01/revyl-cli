@@ -1155,6 +1155,67 @@ func (f *fakeWorkerSessionRequester) WorkerRequestForSession(
 	return f.resp, f.err
 }
 
+func TestRetargetHotReloadDeviceExpoOpensReplacementDeepLink(t *testing.T) {
+	requester := &fakeWorkerSessionRequester{resp: []byte(`{"success":true,"action":"open_url"}`)}
+	result := &hotreload.StartResult{
+		TunnelURL:   "https://hr-a-new.relay.example",
+		DeepLinkURL: "myapp://expo-development-client/?url=https%3A%2F%2Fhr-a-new.relay.example",
+		Transport:   "relay",
+		RelayID:     "a-new",
+	}
+
+	if err := retargetHotReloadDevice(context.Background(), requester, 2, "expo", "ios", "com.example.app", result); err != nil {
+		t.Fatalf("retargetHotReloadDevice() error = %v", err)
+	}
+	if requester.sessionIndex != 2 || requester.path != "/open_url" {
+		t.Fatalf("request target = session %d path %s, want session 2 /open_url", requester.sessionIndex, requester.path)
+	}
+	if requester.body["url"] != result.DeepLinkURL {
+		t.Fatalf("open_url body = %+v, want replacement deep link", requester.body)
+	}
+}
+
+func TestRetargetHotReloadDeviceBareRNIOSRelaunchesWithPackagerHost(t *testing.T) {
+	requester := &fakeWorkerSessionRequester{resp: []byte(`{"success":true,"action":"launch"}`)}
+	result := &hotreload.StartResult{
+		TunnelURL: "https://hr-a-new.relay.example",
+		Transport: "relay",
+		RelayID:   "a-new",
+	}
+
+	if err := retargetHotReloadDevice(context.Background(), requester, 1, "react-native", "ios", "com.example.app", result); err != nil {
+		t.Fatalf("retargetHotReloadDevice() error = %v", err)
+	}
+	if requester.sessionIndex != 1 || requester.path != "/launch" {
+		t.Fatalf("request target = session %d path %s, want session 1 /launch", requester.sessionIndex, requester.path)
+	}
+	if requester.body["bundle_id"] != "com.example.app" {
+		t.Fatalf("bundle_id = %q, want com.example.app", requester.body["bundle_id"])
+	}
+	if requester.body["packager_host"] != "hr-a-new.relay.example:443" {
+		t.Fatalf("packager_host = %q, want relay host:443", requester.body["packager_host"])
+	}
+	if requester.body["packager_scheme"] != "https" {
+		t.Fatalf("packager_scheme = %q, want https", requester.body["packager_scheme"])
+	}
+}
+
+func TestRetargetHotReloadDeviceBareRNAndroidUnsupported(t *testing.T) {
+	requester := &fakeWorkerSessionRequester{resp: []byte(`{"success":true,"action":"launch"}`)}
+	err := retargetHotReloadDevice(
+		context.Background(),
+		requester,
+		1,
+		"react-native",
+		"android",
+		"com.example.app",
+		&hotreload.StartResult{TunnelURL: "https://hr-a-new.relay.example"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "iOS only") {
+		t.Fatalf("retargetHotReloadDevice() error = %v, want iOS-only unsupported error", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Delta push / status file tests
 // ---------------------------------------------------------------------------

@@ -129,6 +129,12 @@ type DevServerDebugConfigurable interface {
 	SetDebugMode(enabled bool)
 }
 
+// DevServerFailureReporter is implemented by DevServer implementations that can
+// report asynchronous runtime failures after startup has completed.
+type DevServerFailureReporter interface {
+	Failures() <-chan RuntimeFailure
+}
+
 // DevServerStatus represents the current status of a development server.
 type DevServerStatus string
 
