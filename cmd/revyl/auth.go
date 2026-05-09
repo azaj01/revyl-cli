@@ -645,7 +645,8 @@ var authBillingCmd = &cobra.Command{
 	Short: "Manage billing and payment method",
 	Long: `Open the Revyl billing page in your browser.
 
-Add a payment method to unlock 30 free simulator minutes per platform per month.
+Use this to add a payment method for more free device time, choose a plan,
+or manage billing.
 
 EXAMPLES:
   revyl auth billing          # Open billing page
@@ -679,12 +680,12 @@ EXAMPLES:
 			ui.PrintSuccess("Plan active: %s", plan.DisplayName)
 			ui.PrintInfo("Opening billing settings to manage your plan...")
 		} else {
-			ui.PrintInfo("No payment method on file")
-			ui.PrintInfo("Opening billing page to add a payment method...")
+			ui.PrintInfo("Opening billing page...")
+			ui.PrintInfo("Add a payment method for more free device time, or choose a plan when you're ready.")
 		}
 
 		appURL := config.GetAppURL(devMode)
-		billingURL := fmt.Sprintf("%s/settings?section=billing", appURL)
+		billingURL := fmt.Sprintf("%s/settings/billing", appURL)
 
 		if openErr := ui.OpenBrowser(billingURL); openErr != nil {
 			ui.PrintInfo("Open this URL in your browser:")

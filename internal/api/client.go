@@ -310,7 +310,7 @@ func authHintForStatus(statusCode int, message, detail string) string {
 		return "Session may have expired. Run 'revyl auth login' to re-authenticate."
 	}
 	if statusCode == 402 {
-		return "No active billing plan. Add a payment method to unlock 30 free simulator minutes:\n  → revyl auth billing"
+		return "Your free device time is used up. Add a payment method for more free time or choose a plan:\n  → revyl auth billing"
 	}
 	return ""
 }
