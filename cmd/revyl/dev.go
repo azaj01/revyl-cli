@@ -42,6 +42,7 @@ var (
 	devStartRemote         bool
 	devStartTunnelURL      string
 	devStartLaunchVars     []string
+	devStartDeviceRunnerID string
 	devStartPort           int
 	devStartTimeout        int
 	devStartOpen           bool
@@ -232,6 +233,7 @@ func registerDevStartFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolVar(&devStartRemote, "remote", false, "Build native iOS changes on a remote Revyl build runner")
 	cmd.Flags().StringVar(&devStartTunnelURL, "tunnel", "", "Use an external Expo tunnel URL or dev-client deep link instead of the Revyl relay")
 	cmd.Flags().StringArrayVar(&devStartLaunchVars, "launch-var", nil, "Org launch variable key or ID to apply when starting the device session (repeatable)")
+	cmd.Flags().StringVar(&devStartDeviceRunnerID, "device-runner", "", "Target a specific device runner ID")
 	cmd.Flags().IntVar(&devStartPort, "port", 8081, "Port for local dev server")
 	cmd.Flags().IntVar(&devStartTimeout, "timeout", 300, "Device idle timeout in seconds")
 	cmd.Flags().BoolVar(&devStartOpen, "open", true, "Open live device viewer in browser")
@@ -680,6 +682,21 @@ func runDevStart(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	if platformKey == "" && !noBuild {
+		resolvedKey, resolvedPlatform, resolveErr := resolveHotReloadBuildPlatform(cfg, providerCfg, requestedPlatform, requestedPlatform, noBuild)
+		if resolveErr == nil {
+			platformKey = resolvedKey
+			devicePlatform = resolvedPlatform
+			if cfgForKey, ok := cfg.Build.Platforms[platformKey]; ok {
+				platformCfg = cfgForKey
+			}
+		} else if appIDOverride != "" || buildVersionID != "" {
+			ui.PrintWarning("Native rebuild controls unavailable: %v", resolveErr)
+		} else {
+			return resolveErr
+		}
+	}
+
 	needsDevBuild := devStartBuild || buildVersionID == ""
 
 	if noBuild {
@@ -923,6 +940,8 @@ func runDevStart(cmd *cobra.Command, args []string) error {
 				AppPackage:     strings.TrimSpace(buildDetail.PackageName),
 				AppLink:        startResult.DeepLinkURL,
 				IdleTimeout:    time.Duration(timeout) * time.Second,
+				DeviceRunnerID: strings.TrimSpace(devStartDeviceRunnerID),
+				SkipAppInstall: true,
 			}),
 			30*time.Second,
 			nil,
@@ -949,22 +968,44 @@ func runDevStart(cmd *cobra.Command, args []string) error {
 
 	// Explicitly install the dev build via worker endpoint so dev loop behavior
 	// is deterministic even if backend start-device flows skip installation.
+	// Use install_mode=fast to avoid the streaming APK install path and seed the
+	// worker dev cache for later delta installs.
 	installBody := map[string]string{
-		"app_url": strings.TrimSpace(buildDetail.DownloadURL),
+		"app_url":      strings.TrimSpace(buildDetail.DownloadURL),
+		"install_mode": "fast",
 	}
 	if bundleID := strings.TrimSpace(buildDetail.PackageName); bundleID != "" {
 		installBody["bundle_id"] = bundleID
 	}
 	ui.PrintInfo("Installing dev build on device...")
 	ui.PrintDebug("install payload: app_url=%s bundle_id=%s", maskPresignedURL(installBody["app_url"]), installBody["bundle_id"])
-	installStarted := debugDevActionRequest("install", session.Index, installBody)
-	installRespBody, err := deviceMgr.WorkerRequestForSession(ctx, session.Index, "/install", installBody)
-	debugDevActionResult("install", session.Index, installStarted, installRespBody, err)
-	if err != nil {
-		if isUserCanceled(err) {
-			return nil
+	var installRespBody []byte
+	const maxInstallRetries = 3
+	for attempt := 0; attempt <= maxInstallRetries; attempt++ {
+		installStarted := debugDevActionRequest("install", session.Index, installBody)
+		installRespBody, err = deviceMgr.WorkerRequestForSession(ctx, session.Index, "/install", installBody)
+		debugDevActionResult("install", session.Index, installStarted, installRespBody, err)
+		if err == nil {
+			break
 		}
-		return fmt.Errorf("device started but app install failed: %w\nhint: try re-running with --build to force a fresh build+upload", err)
+		var workerErr *mcppkg.WorkerHTTPError
+		isDeviceNotReady := errors.As(err, &workerErr) && workerErr.StatusCode == 503
+		if !isDeviceNotReady || attempt == maxInstallRetries {
+			if isUserCanceled(err) {
+				return nil
+			}
+			return fmt.Errorf("device started but app install failed: %w\nhint: try re-running with --build to force a fresh build+upload", err)
+		}
+		backoff := time.Duration(1<<uint(attempt)) * time.Second // 1s, 2s, 4s
+		ui.PrintDebug("device not ready, retrying install in %s (attempt %d/%d)", backoff, attempt+1, maxInstallRetries)
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			if isUserCanceled(ctx.Err()) {
+				return nil
+			}
+			return ctx.Err()
+		}
 	}
 	ui.PrintDebug("install worker response: %s", string(installRespBody))
 	if err := ensureWorkerActionSucceeded(installRespBody, "install"); err != nil {
@@ -1056,7 +1097,6 @@ func runDevStart(cmd *cobra.Command, args []string) error {
 	}
 
 	viewerURL := devSessionViewerURL(session, devMode)
-	printDevReadyFooter(viewerURL, startResult.DeepLinkURL, manualDeepLinkRequired, isBareRN, noBuild, ctxName, session.Index)
 
 	// Compute packager host once for the rebuild loop. Only bare RN on iOS
 	// needs this — the worker writes RCT_jsLocation to NSUserDefaults so the
@@ -1065,10 +1105,6 @@ func runDevStart(cmd *cobra.Command, args []string) error {
 	hrPackagerScheme := ""
 	if isBareRN && devicePlatform == "ios" {
 		hrPackagerHost, hrPackagerScheme = metroPackagerAddressFromTunnelURL(startResult.TunnelURL)
-	}
-
-	if openBrowser {
-		_ = ui.OpenBrowser(viewerURL)
 	}
 
 	pidPath := devCtxPIDPath(cwd, ctxName)
@@ -1116,6 +1152,25 @@ func runDevStart(cmd *cobra.Command, args []string) error {
 		_ = saveDevContext(cwd, devCtx)
 	}()
 
+	hrStatusPath := devCtxStatusPath(cwd, ctxName)
+	writeDevStatusIdle(hrStatusPath, session, viewerURL, startResult.TunnelURL, startResult.DeepLinkURL, startResult.Transport, devicePlatform, false)
+
+	cockpitRebuilds := make(chan struct{}, 1)
+	cockpit, cockpitErr := startDevCockpitForContext(context.Background(), cwd, ctxName, viewerURL, !noBuild && strings.TrimSpace(platformKey) != "", cockpitRebuilds, stopper.RequestStop)
+	cockpitURL := ""
+	if cockpitErr != nil {
+		ui.PrintWarning("Local cockpit unavailable: %v", cockpitErr)
+	} else {
+		cockpitURL = cockpit.URL
+		defer cockpit.Close(context.Background())
+	}
+
+	printDevReadyFooter(cockpitURL, viewerURL, startResult.DeepLinkURL, manualDeepLinkRequired, isBareRN, noBuild, ctxName, session.Index)
+
+	if openBrowser {
+		_ = ui.OpenBrowser(devBrowserOpenTarget(cockpitURL, viewerURL))
+	}
+
 	sigusr1 := make(chan os.Signal, 1)
 	if sigutil.RebuildSignal != nil {
 		signal.Notify(sigusr1, sigutil.RebuildSignal)
@@ -1126,7 +1181,6 @@ func runDevStart(cmd *cobra.Command, args []string) error {
 
 	hrTransport := devpush.NewTransport(client, deviceMgr)
 	hrManifestPath := devCtxManifestPath(cwd, ctxName)
-	hrStatusPath := devCtxStatusPath(cwd, ctxName)
 	hrCachedManifest, manifestLoadErr := build.LoadManifest(hrManifestPath)
 	if manifestLoadErr != nil {
 		ui.PrintDim("  Could not load cached manifest: %v", manifestLoadErr)
@@ -1141,6 +1195,7 @@ func runDevStart(cmd *cobra.Command, args []string) error {
 			ui.PrintDebug("seeded delta manifest from DerivedData build")
 		}
 	}
+	writeDevStatusIdle(hrStatusPath, session, viewerURL, startResult.TunnelURL, startResult.DeepLinkURL, startResult.Transport, devicePlatform, hrCachedManifest != nil)
 	var hrBgUploadCancel context.CancelFunc
 	defer func() {
 		if hrBgUploadCancel != nil {
@@ -1218,6 +1273,12 @@ func runDevStart(cmd *cobra.Command, args []string) error {
 				continue
 			}
 			doRebuild = true
+		case <-cockpitRebuilds:
+			if noBuild {
+				ui.PrintWarning("Rebuild disabled (--no-build). Use your local dev server to reload.")
+				continue
+			}
+			doRebuild = true
 		case key := <-stdinKeys:
 			switch key {
 			case 'r':
@@ -1246,8 +1307,23 @@ func runDevStart(cmd *cobra.Command, args []string) error {
 		lastRebuildStart = time.Now()
 
 		hrRebuildCount++
+		writeDevStatusRebuildStarted(
+			hrStatusPath,
+			session,
+			viewerURL,
+			startResult.TunnelURL,
+			startResult.DeepLinkURL,
+			startResult.Transport,
+			devicePlatform,
+			hrRebuildCount,
+			hrCachedManifest != nil,
+			platformKey,
+		)
 		result := devBuildAndDeltaPush(ctx, cancel, cmd, cfg, configPath, apiKey, platformKey, devicePlatform,
-			bundleID, session, deviceMgr, client, hrTransport, hrCachedManifest, hrManifestPath, cwd, hrPackagerHost, hrPackagerScheme)
+			bundleID, session, deviceMgr, client, hrTransport, hrCachedManifest, hrManifestPath, cwd, hrPackagerHost, hrPackagerScheme,
+			func(entry devRebuildLogEntry) {
+				appendDevStatusRebuildLog(hrStatusPath, entry, 16)
+			})
 
 		if drainStdinKeys(stdinKeys) {
 			stopper.RequestStop()
@@ -1352,10 +1428,10 @@ func devSessionViewerURL(session *mcppkg.DeviceSession, devMode bool) string {
 	return viewerURL
 }
 
-func printDevReadyFooter(viewerURL, deepLinkURL string, manualDeepLinkRequired, isBareRN, noBuild bool, ctxName string, sessionIndex int) {
+func printDevReadyFooter(cockpitURL, viewerURL, deepLinkURL string, manualDeepLinkRequired, isBareRN, noBuild bool, ctxName string, sessionIndex int) {
 	ui.Println()
 	ui.PrintSuccess("Dev loop ready")
-	ui.PrintLink("Viewer", viewerURL)
+	printDevBrowserLinks(cockpitURL, viewerURL)
 	if isBareRN {
 		ui.PrintInfo("Tunnel URL: %s", deepLinkURL)
 	} else {
@@ -1375,6 +1451,20 @@ func printDevReadyFooter(viewerURL, deepLinkURL string, manualDeepLinkRequired, 
 	ui.PrintDim("  Starting another loop here? Run revyl dev again; Revyl will pick a safe context name.")
 	ui.Println()
 	printNewTerminalHints(ctxName, sessionIndex)
+}
+
+func printDevBrowserLinks(cockpitURL, viewerURL string) {
+	if strings.TrimSpace(cockpitURL) != "" {
+		ui.PrintLink("Local cockpit", cockpitURL)
+	}
+	ui.PrintLink("Hosted viewer", viewerURL)
+}
+
+func devBrowserOpenTarget(cockpitURL, viewerURL string) string {
+	if strings.TrimSpace(cockpitURL) != "" {
+		return cockpitURL
+	}
+	return viewerURL
 }
 
 func printHotReloadReady(providerDisplay string, startResult *hotreload.StartResult) {
@@ -2195,6 +2285,8 @@ func runDevRebuildOnly(cmd *cobra.Command, cfg *config.ProjectConfig, configPath
 				AppURL:         strings.TrimSpace(buildDetail.DownloadURL),
 				AppPackage:     bundleID,
 				IdleTimeout:    time.Duration(timeout) * time.Second,
+				DeviceRunnerID: strings.TrimSpace(devStartDeviceRunnerID),
+				SkipAppInstall: true,
 			}),
 			30*time.Second,
 			nil,
@@ -2267,17 +2359,6 @@ func runDevRebuildOnly(cmd *cobra.Command, cfg *config.ProjectConfig, configPath
 
 	viewerURL := devSessionViewerURL(session, devMode)
 
-	ui.Println()
-	ui.PrintSuccess("Dev loop ready")
-	ui.PrintLink("Viewer", viewerURL)
-	ui.PrintInfo("Installed build: %s", formatBuildVersionLabel(latestVersion))
-	if identifier := formatInstalledAppIdentifier(devicePlatform, bundleID); identifier != "" {
-		ui.PrintInfo("Installed app: %s", identifier)
-	}
-	ui.Println()
-	printNewTerminalHints(ctxName, session.Index)
-	ui.Println()
-
 	pidPath := devCtxPIDPath(cwd, ctxName)
 	if err := os.MkdirAll(filepath.Dir(pidPath), 0755); err != nil {
 		return fmt.Errorf("failed to create dev context directory: %w", err)
@@ -2314,6 +2395,30 @@ func runDevRebuildOnly(cmd *cobra.Command, cfg *config.ProjectConfig, configPath
 		_ = saveDevContext(cwd, devCtx)
 	}()
 
+	statusPath := devCtxStatusPath(cwd, ctxName)
+	writeDevStatusIdle(statusPath, session, viewerURL, "", "", "", devicePlatform, false)
+
+	cockpitRebuilds := make(chan struct{}, 1)
+	cockpit, cockpitErr := startDevCockpitForContext(context.Background(), cwd, ctxName, viewerURL, strings.TrimSpace(platformKey) != "", cockpitRebuilds, stopper.RequestStop)
+	cockpitURL := ""
+	if cockpitErr != nil {
+		ui.PrintWarning("Local cockpit unavailable: %v", cockpitErr)
+	} else {
+		cockpitURL = cockpit.URL
+		defer cockpit.Close(context.Background())
+	}
+
+	ui.Println()
+	ui.PrintSuccess("Dev loop ready")
+	printDevBrowserLinks(cockpitURL, viewerURL)
+	ui.PrintInfo("Installed build: %s", formatBuildVersionLabel(latestVersion))
+	if identifier := formatInstalledAppIdentifier(devicePlatform, bundleID); identifier != "" {
+		ui.PrintInfo("Installed app: %s", identifier)
+	}
+	ui.Println()
+	printNewTerminalHints(ctxName, session.Index)
+	ui.Println()
+
 	sigusr1 := make(chan os.Signal, 1)
 	if sigutil.RebuildSignal != nil {
 		signal.Notify(sigusr1, sigutil.RebuildSignal)
@@ -2321,12 +2426,11 @@ func runDevRebuildOnly(cmd *cobra.Command, cfg *config.ProjectConfig, configPath
 	defer signal.Stop(sigusr1)
 
 	if openBrowser {
-		_ = ui.OpenBrowser(viewerURL)
+		_ = ui.OpenBrowser(devBrowserOpenTarget(cockpitURL, viewerURL))
 	}
 
 	transport := devpush.NewTransport(client, deviceMgr)
 	manifestPath := devCtxManifestPath(cwd, ctxName)
-	statusPath := devCtxStatusPath(cwd, ctxName)
 	cachedManifest, cachedManifestErr := build.LoadManifest(manifestPath)
 	if cachedManifestErr != nil {
 		ui.PrintDim("  Could not load cached manifest: %v", cachedManifestErr)
@@ -2402,6 +2506,8 @@ func runDevRebuildOnly(cmd *cobra.Command, cfg *config.ProjectConfig, configPath
 			}
 		case <-sigusr1:
 			doRebuild = true
+		case <-cockpitRebuilds:
+			doRebuild = true
 		case event := <-fileWatchCh:
 			label := formatChangedFiles(event.Files)
 			ui.PrintInfo("File changed: %s — rebuilding...", label)
@@ -2430,8 +2536,12 @@ func runDevRebuildOnly(cmd *cobra.Command, cfg *config.ProjectConfig, configPath
 		lastRebuildStart = time.Now()
 
 		rebuildCount++
+		writeDevStatusRebuildStarted(statusPath, session, viewerURL, "", "", "", devicePlatform, rebuildCount, cachedManifest != nil, platformKey)
 		result := devBuildAndDeltaPush(ctx, cancel, cmd, cfg, configPath, apiKey, platformKey, devicePlatform,
-			bundleID, session, deviceMgr, client, transport, cachedManifest, manifestPath, cwd, "", "")
+			bundleID, session, deviceMgr, client, transport, cachedManifest, manifestPath, cwd, "", "",
+			func(entry devRebuildLogEntry) {
+				appendDevStatusRebuildLog(statusPath, entry, 16)
+			})
 
 		if drainStdinKeys(stdinKeys) {
 			stopper.RequestStop()
@@ -2701,6 +2811,7 @@ type devRebuildResult struct {
 	buildMode       string
 	buildOutput     string
 	buildErrors     []build.BuildError
+	logs            []devRebuildLogEntry
 	elapsed         time.Duration
 	buildDuration   time.Duration
 	pushDuration    time.Duration
@@ -2713,6 +2824,78 @@ type devRebuildResult struct {
 	remoteJobID     string
 	remoteVersionID string
 	remoteVersion   string
+}
+
+type devRebuildLogSink func(devRebuildLogEntry)
+
+func newDevRebuildLog(kind, message string) devRebuildLogEntry {
+	return devRebuildLogEntry{
+		At:      time.Now().UTC().Format(time.RFC3339Nano),
+		Kind:    strings.TrimSpace(kind),
+		Message: sanitizeDevRebuildLogMessage(message),
+	}
+}
+
+func sanitizeDevRebuildLogMessage(message string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	for i := 0; i < len(message); i++ {
+		c := message[i]
+		if c == 0x1b {
+			b.WriteByte(' ')
+			if i+1 < len(message) && message[i+1] == '[' {
+				i += 2
+				for i < len(message) && (message[i] < 0x40 || message[i] > 0x7e) {
+					i++
+				}
+			} else if i+1 < len(message) && message[i+1] == ']' {
+				i += 2
+				for i < len(message) {
+					if message[i] == 0x07 {
+						break
+					}
+					if message[i] == 0x1b && i+1 < len(message) && message[i+1] == '\\' {
+						i++
+						break
+					}
+					i++
+				}
+			}
+			continue
+		}
+		if c < 0x20 || c == 0x7f {
+			if c == '\n' || c == '\r' || c == '\t' {
+				b.WriteByte(' ')
+			}
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+func appendDevRebuildLog(result *devRebuildResult, kind, format string, args ...interface{}) devRebuildLogEntry {
+	if result == nil {
+		return devRebuildLogEntry{}
+	}
+	message := sanitizeDevRebuildLogMessage(fmt.Sprintf(format, args...))
+	if message == "" {
+		return devRebuildLogEntry{}
+	}
+	entry := newDevRebuildLog(kind, message)
+	result.logs = append(result.logs, entry)
+	return entry
+}
+
+func appendAndPublishDevRebuildLog(result *devRebuildResult, publish devRebuildLogSink, kind, format string, args ...interface{}) {
+	entry := appendDevRebuildLog(result, kind, format, args...)
+	if publish != nil && strings.TrimSpace(entry.Message) != "" {
+		publish(entry)
+	}
 }
 
 // formatProgressDuration formats a duration for user-facing rebuild status messages.
@@ -2816,12 +2999,14 @@ func devBuildAndDeltaPush(
 	manifestPath, cwd string,
 	packagerHost string,
 	packagerScheme string,
+	publishLog devRebuildLogSink,
 ) devRebuildResult {
 	result := devRebuildResult{}
 	rebuildStart := time.Now()
 
 	ui.Println()
 	ui.PrintInfo("Rebuilding %s...", platformKey)
+	appendAndPublishDevRebuildLog(&result, publishLog, "info", "Rebuild started for %s", platformKey)
 
 	rebuildCtx, rebuildCancel := context.WithCancel(ctx)
 	go monitorSessionDuringRebuild(rebuildCtx, deviceMgr, session, cancelParent)
@@ -2830,6 +3015,7 @@ func devBuildAndDeltaPush(
 	if !ok {
 		rebuildCancel()
 		result.buildErr = fmt.Errorf("platform %q not found in config", platformKey)
+		appendAndPublishDevRebuildLog(&result, publishLog, "error", "%v", result.buildErr)
 		result.elapsed = time.Since(rebuildStart)
 		return result
 	}
@@ -2838,11 +3024,19 @@ func devBuildAndDeltaPush(
 	if platCfg.Scheme != "" {
 		buildCommand = build.ApplySchemeToCommand(buildCommand, platCfg.Scheme)
 	}
+	appendAndPublishDevRebuildLog(&result, publishLog, "info", "Build command started: %s", buildCommand)
 
 	runner := build.NewRunner(cwd)
 	runner.FilterOutput = !ui.IsDebugMode()
 
-	progress := RunBuildWithProgress(runner, buildCommand, platformKey, 10*time.Second)
+	progress := RunBuildWithProgressWithHooks(runner, buildCommand, platformKey, 10*time.Second, &BuildProgressHooks{
+		OnLine: func(line string) {
+			appendAndPublishDevRebuildLog(&result, publishLog, "info", "Build: %s", line)
+		},
+		OnQuietPeriod: func(_ int, elapsed time.Duration, _ []string) {
+			appendAndPublishDevRebuildLog(&result, publishLog, "info", "Build still running (%s elapsed)", formatBuildProgressDuration(elapsed))
+		},
+	})
 
 	result.buildDuration = progress.Duration
 	result.buildOutput = progress.Output
@@ -2851,10 +3045,13 @@ func devBuildAndDeltaPush(
 
 	if buildErr != nil {
 		ui.PrintDim("  Build failed after %s", formatProgressDuration(result.buildDuration))
+		appendAndPublishDevRebuildLog(&result, publishLog, "error", "Build failed after %s: %v", formatProgressDuration(result.buildDuration), buildErr)
 	} else if buildLineCount > 0 {
 		ui.PrintDim("  Build completed in %s (%d updates)", formatProgressDuration(result.buildDuration), buildLineCount)
+		appendAndPublishDevRebuildLog(&result, publishLog, "success", "Build completed in %s (%d updates)", formatProgressDuration(result.buildDuration), buildLineCount)
 	} else {
 		ui.PrintDim("  Build completed in %s", formatProgressDuration(result.buildDuration))
+		appendAndPublishDevRebuildLog(&result, publishLog, "success", "Build completed in %s", formatProgressDuration(result.buildDuration))
 	}
 
 	rebuildCancel()
@@ -2871,6 +3068,7 @@ func devBuildAndDeltaPush(
 
 	if ctx.Err() != nil {
 		result.buildErr = ctx.Err()
+		appendAndPublishDevRebuildLog(&result, publishLog, "error", "Rebuild canceled: %v", result.buildErr)
 		result.elapsed = time.Since(rebuildStart)
 		return result
 	}
@@ -2878,6 +3076,7 @@ func devBuildAndDeltaPush(
 	artifactPath, artErr := build.ResolveArtifactPath(cwd, platCfg.Output)
 	if artErr != nil {
 		result.buildErr = fmt.Errorf("artifact not found after build: %w", artErr)
+		appendAndPublishDevRebuildLog(&result, publishLog, "error", "%v", result.buildErr)
 		result.elapsed = time.Since(rebuildStart)
 		return result
 	}
@@ -2886,6 +3085,7 @@ func devBuildAndDeltaPush(
 	newManifest, manErr := build.BuildManifest(artifactPath)
 	if manErr != nil {
 		result.buildErr = fmt.Errorf("failed to build manifest: %w", manErr)
+		appendAndPublishDevRebuildLog(&result, publishLog, "error", "%v", result.buildErr)
 		result.elapsed = time.Since(rebuildStart)
 		return result
 	}
@@ -2906,6 +3106,7 @@ func devBuildAndDeltaPush(
 		result.skipped = true
 		result.manifest = newManifest
 		result.elapsed = time.Since(rebuildStart)
+		appendAndPublishDevRebuildLog(&result, publishLog, "info", "No native file changes detected; skipping device push")
 		_ = build.SaveManifest(newManifest, manifestPath)
 		return result
 	}
@@ -2920,25 +3121,30 @@ func devBuildAndDeltaPush(
 		changedCount := len(diff.Changed) + len(diff.Deleted)
 		ui.PrintInfo("Pushing changes to device...")
 		ui.PrintDim("  %d files changed (%.1f MB)", changedCount, float64(deltaSize)/(1024*1024))
+		appendAndPublishDevRebuildLog(&result, publishLog, "info", "%d files changed (%.1f MB delta)", changedCount, float64(deltaSize)/(1024*1024))
 
 		deltaZip, zipErr := build.CreateDeltaZip(artifactPath, diff.Changed)
 		if zipErr != nil {
 			result.pushErr = fmt.Errorf("failed to create delta zip: %w", zipErr)
+			appendAndPublishDevRebuildLog(&result, publishLog, "error", "%v", result.pushErr)
 			result.elapsed = time.Since(rebuildStart)
 			return result
 		}
 
 		pushStart := time.Now()
 		ui.StartSpinner("Uploading delta to device...")
+		appendAndPublishDevRebuildLog(&result, publishLog, "info", "Uploading delta to device")
 		ref, pushErr := transport.PushArtifact(ctx, session, deltaZip)
 		ui.StopSpinner()
 		if pushErr != nil {
 			result.pushErr = fmt.Errorf("failed to push delta: %w", pushErr)
+			appendAndPublishDevRebuildLog(&result, publishLog, "error", "%v", result.pushErr)
 			result.elapsed = time.Since(rebuildStart)
 			return result
 		}
 
 		ui.StartSpinner("Installing delta on device...")
+		appendAndPublishDevRebuildLog(&result, publishLog, "info", "Installing delta on device")
 		installResult, installErr := transport.SendInstall(ctx, session, ref, devpush.InstallOpts{
 			Mode:         "delta",
 			BundleID:     bundleID,
@@ -2952,6 +3158,7 @@ func devBuildAndDeltaPush(
 			// Delta failed (e.g. worker cache empty) — fall through to full
 			// upload path instead of surfacing the error to the user.
 			ui.PrintDim("  Delta push failed (%v), falling back to full install...", installErr)
+			appendAndPublishDevRebuildLog(&result, publishLog, "warning", "Delta install failed; falling back to full install: %v", installErr)
 		} else {
 			result.usedDelta = true
 			result.dataPreserved = installResult.DataPreserved
@@ -2959,6 +3166,11 @@ func devBuildAndDeltaPush(
 			result.filesChanged = len(diff.Changed) + len(diff.Deleted)
 			result.manifest = newManifest
 			result.elapsed = time.Since(rebuildStart)
+			if result.dataPreserved {
+				appendAndPublishDevRebuildLog(&result, publishLog, "success", "Delta installed; app data preserved")
+			} else {
+				appendAndPublishDevRebuildLog(&result, publishLog, "success", "Delta installed")
+			}
 			_ = build.SaveManifest(newManifest, manifestPath)
 			return result
 		}
@@ -2970,10 +3182,12 @@ func devBuildAndDeltaPush(
 	ui.PrintInfo("Uploading full artifact to cloud...")
 	pushStart := time.Now()
 	ui.StartSpinner("Uploading full artifact to cloud...")
+	appendAndPublishDevRebuildLog(&result, publishLog, "info", "Uploading full artifact to cloud")
 	downloadURL, detectedBID, uploadErr := uploadExistingArtifact(ctx, client, artifactPath, appID, cwd)
 	ui.StopSpinner()
 	if uploadErr != nil {
 		result.pushErr = fmt.Errorf("full artifact upload failed: %w", uploadErr)
+		appendAndPublishDevRebuildLog(&result, publishLog, "error", "%v", result.pushErr)
 		result.elapsed = time.Since(rebuildStart)
 		return result
 	}
@@ -2989,16 +3203,19 @@ func devBuildAndDeltaPush(
 		reinstallBody["bundle_id"] = bundleID
 	}
 	ui.StartSpinner("Installing full build on device...")
+	appendAndPublishDevRebuildLog(&result, publishLog, "info", "Installing full build on device")
 	resp, installErr := deviceMgr.WorkerRequestForSession(ctx, session.Index, "/install", reinstallBody)
 	if installErr != nil {
 		ui.StopSpinner()
 		result.pushErr = fmt.Errorf("reinstall failed: %w", installErr)
+		appendAndPublishDevRebuildLog(&result, publishLog, "error", "%v", result.pushErr)
 		result.elapsed = time.Since(rebuildStart)
 		return result
 	}
 	if err := ensureWorkerActionSucceeded(resp, "install"); err != nil {
 		ui.StopSpinner()
 		result.pushErr = fmt.Errorf("reinstall failed: %w", err)
+		appendAndPublishDevRebuildLog(&result, publishLog, "error", "%v", result.pushErr)
 		result.elapsed = time.Since(rebuildStart)
 		return result
 	}
@@ -3012,12 +3229,14 @@ func devBuildAndDeltaPush(
 		launchID = result.newBundleID
 	}
 	ui.StartSpinner("Launching app...")
+	appendAndPublishDevRebuildLog(&result, publishLog, "info", "Launching app")
 	tryLaunchInstalledApp(ctx, deviceMgr, session.Index, devicePlatform, launchID, packagerHost, packagerScheme)
 	ui.StopSpinner()
 
 	result.manifest = newManifest
 	result.filesChanged = len(diff.Changed) + len(diff.Deleted)
 	result.elapsed = time.Since(rebuildStart)
+	appendAndPublishDevRebuildLog(&result, publishLog, "success", "Full build installed; app data may have been reset")
 	_ = build.SaveManifest(newManifest, manifestPath)
 	return result
 }
@@ -3194,22 +3413,138 @@ type devStatus struct {
 	LastRebuild    *devRebuildInfo `json:"last_rebuild,omitempty"`
 }
 
+type devRebuildLogEntry struct {
+	At      string `json:"at"`
+	Message string `json:"message"`
+	Kind    string `json:"kind,omitempty"`
+}
+
 type devRebuildInfo struct {
-	CompletedAt      string             `json:"completed_at"`
-	Seq              int                `json:"seq"`
-	Status           string             `json:"status"`
-	DurationMs       int64              `json:"duration_ms"`
-	BuildDurationMs  int64              `json:"build_duration_ms"`
-	PushMode         string             `json:"push_mode"`
-	PushDurationMs   int64              `json:"push_duration_ms"`
-	FilesChanged     int                `json:"files_changed"`
-	DataPreserved    bool               `json:"data_preserved"`
-	BackgroundUpload string             `json:"background_upload_status,omitempty"`
-	RemoteJobID      string             `json:"remote_job_id,omitempty"`
-	RemoteVersionID  string             `json:"remote_build_version_id,omitempty"`
-	RemoteVersion    string             `json:"remote_build_version,omitempty"`
-	Error            string             `json:"error,omitempty"`
-	BuildErrors      []build.BuildError `json:"build_errors"`
+	StartedAt        string               `json:"started_at,omitempty"`
+	CompletedAt      string               `json:"completed_at"`
+	Seq              int                  `json:"seq"`
+	Status           string               `json:"status"`
+	DurationMs       int64                `json:"duration_ms"`
+	BuildDurationMs  int64                `json:"build_duration_ms"`
+	PushMode         string               `json:"push_mode"`
+	PushDurationMs   int64                `json:"push_duration_ms"`
+	FilesChanged     int                  `json:"files_changed"`
+	DataPreserved    bool                 `json:"data_preserved"`
+	BackgroundUpload string               `json:"background_upload_status,omitempty"`
+	RemoteJobID      string               `json:"remote_job_id,omitempty"`
+	RemoteVersionID  string               `json:"remote_build_version_id,omitempty"`
+	RemoteVersion    string               `json:"remote_build_version,omitempty"`
+	Error            string               `json:"error,omitempty"`
+	BuildErrors      []build.BuildError   `json:"build_errors"`
+	Logs             []devRebuildLogEntry `json:"logs,omitempty"`
+}
+
+func writeDevStatusIdle(
+	statusPath string,
+	session *mcppkg.DeviceSession,
+	viewerURL string,
+	tunnelURL string,
+	deepLinkURL string,
+	transport string,
+	platform string,
+	cacheWarm bool,
+) {
+	ds := devStatus{
+		State:          "idle",
+		PID:            os.Getpid(),
+		Platform:       strings.TrimSpace(platform),
+		ViewerURL:      strings.TrimSpace(viewerURL),
+		TunnelURL:      strings.TrimSpace(tunnelURL),
+		DeepLinkURL:    strings.TrimSpace(deepLinkURL),
+		Transport:      strings.TrimSpace(transport),
+		DeltaCacheWarm: cacheWarm,
+		RebuildCount:   0,
+	}
+	if session != nil {
+		ds.SessionID = session.SessionID
+	}
+	writeDevStatusSnapshot(statusPath, ds)
+}
+
+func writeDevStatusRebuildStarted(
+	statusPath string,
+	session *mcppkg.DeviceSession,
+	viewerURL string,
+	tunnelURL string,
+	deepLinkURL string,
+	transport string,
+	platform string,
+	rebuildCount int,
+	cacheWarm bool,
+	platformKey string,
+) {
+	platformKey = strings.TrimSpace(platformKey)
+	if platformKey == "" {
+		platformKey = strings.TrimSpace(platform)
+	}
+	logs := []devRebuildLogEntry{
+		newDevRebuildLog("info", "Rebuild requested"),
+	}
+	if platformKey != "" {
+		logs = append(logs, newDevRebuildLog("info", fmt.Sprintf("Build command starting for %s", platformKey)))
+	}
+	ds := devStatus{
+		State:          "building",
+		PID:            os.Getpid(),
+		Platform:       strings.TrimSpace(platform),
+		ViewerURL:      strings.TrimSpace(viewerURL),
+		TunnelURL:      strings.TrimSpace(tunnelURL),
+		DeepLinkURL:    strings.TrimSpace(deepLinkURL),
+		Transport:      strings.TrimSpace(transport),
+		DeltaCacheWarm: cacheWarm,
+		RebuildCount:   rebuildCount,
+		LastRebuild: &devRebuildInfo{
+			StartedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+			Seq:           rebuildCount,
+			Status:        "running",
+			PushMode:      "pending",
+			DataPreserved: cacheWarm,
+			BuildErrors:   []build.BuildError{},
+			Logs:          logs,
+		},
+	}
+	if session != nil {
+		ds.SessionID = session.SessionID
+	}
+	writeDevStatusSnapshot(statusPath, ds)
+}
+
+func appendDevStatusRebuildLog(statusPath string, entry devRebuildLogEntry, maxEntries int) {
+	if strings.TrimSpace(statusPath) == "" || strings.TrimSpace(entry.Message) == "" {
+		return
+	}
+	if maxEntries <= 0 {
+		maxEntries = 16
+	}
+	data, err := os.ReadFile(statusPath)
+	if err != nil {
+		return
+	}
+	var ds devStatus
+	if err := json.Unmarshal(data, &ds); err != nil || ds.LastRebuild == nil {
+		return
+	}
+	if !devCockpitRebuildRunningStatus(ds.LastRebuild.Status) {
+		return
+	}
+	logs := ds.LastRebuild.Logs
+	if len(logs) > 0 {
+		last := logs[len(logs)-1]
+		if strings.TrimSpace(last.Message) == strings.TrimSpace(entry.Message) && strings.TrimSpace(last.Kind) == strings.TrimSpace(entry.Kind) {
+			return
+		}
+	}
+	logs = append(logs, entry)
+	if len(logs) > maxEntries {
+		logs = logs[len(logs)-maxEntries:]
+	}
+	ds.LastRebuild.Logs = logs
+	writeDevStatusSnapshot(statusPath, ds)
 }
 
 func writeDevStatus(
@@ -3256,6 +3591,17 @@ func writeDevStatus(
 	} else if result.pushErr != nil {
 		lastErr = result.pushErr.Error()
 	}
+	logs := result.logs
+	if len(logs) == 0 {
+		switch status {
+		case "build_failed", "push_failed":
+			logs = []devRebuildLogEntry{newDevRebuildLog("error", devCockpitDisplayValue(lastErr, "Rebuild failed"))}
+		case "skipped":
+			logs = []devRebuildLogEntry{newDevRebuildLog("info", "No native file changes detected; skipping device push")}
+		default:
+			logs = []devRebuildLogEntry{newDevRebuildLog("success", "Rebuild completed")}
+		}
+	}
 
 	ds := devStatus{
 		State:          "idle",
@@ -3283,6 +3629,7 @@ func writeDevStatus(
 			RemoteVersion:    strings.TrimSpace(result.remoteVersion),
 			Error:            lastErr,
 			BuildErrors:      errs,
+			Logs:             logs,
 		},
 	}
 
@@ -3290,7 +3637,10 @@ func writeDevStatus(
 		ds.SessionID = session.SessionID
 	}
 	ds.ViewerURL = strings.TrimSpace(viewerURL)
+	writeDevStatusSnapshot(statusPath, ds)
+}
 
+func writeDevStatusSnapshot(statusPath string, ds devStatus) {
 	data, err := json.MarshalIndent(ds, "", "  ")
 	if err != nil {
 		ui.PrintDim("  Failed to marshal dev status: %v", err)
@@ -3445,6 +3795,9 @@ func runDevRebuild(cmd *cobra.Command, args []string) error {
 					ui.PrintDim("  push_mode=%s files_changed=%d data_preserved=%v", rb.PushMode, rb.FilesChanged, rb.DataPreserved)
 				} else {
 					ui.PrintError("Rebuild %s (%dms)", rb.Status, rb.DurationMs)
+					if strings.TrimSpace(rb.Error) != "" {
+						ui.PrintDim("  %s", strings.TrimSpace(rb.Error))
+					}
 					for _, be := range rb.BuildErrors {
 						ui.PrintDim("  %s:%d:%d: %s: %s", be.File, be.Line, be.Column, be.Severity, be.Message)
 					}

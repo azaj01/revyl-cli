@@ -379,6 +379,17 @@ func TestManagerLocalHealthMonitorEmitsLocalDevServerDown(t *testing.T) {
 	}
 }
 
+func TestLocalHealthCheckConnectionRefusedRecognizesWindowsDetail(t *testing.T) {
+	check := DiagnosticCheck{
+		Name:   "Metro health",
+		Passed: false,
+		Detail: "Get \"http://127.0.0.1:8081/status\": dial tcp 127.0.0.1:8081: connectex: No connection could be made because the target machine actively refused it.",
+	}
+	if !localHealthCheckConnectionRefused(check) {
+		t.Fatal("expected Windows active-refusal detail to be treated as connection refused")
+	}
+}
+
 func TestManagerLocalHealthMonitorEmitsMetro500Warning(t *testing.T) {
 	oldInterval := localDevServerHealthInterval
 	localDevServerHealthInterval = 10 * time.Millisecond

@@ -298,9 +298,30 @@ type BuildConfig struct {
 	// explicitly overrides this setting.
 	NoBuild bool `yaml:"no_build,omitempty"`
 
+	// Source describes where remote build runners should fetch source from.
+	Source BuildSource `yaml:"source,omitempty"`
+
 	// Platforms contains platform-specific build configurations keyed by platform name
 	// (e.g. "ios", "android", "ios-dev").
 	Platforms map[string]BuildPlatform `yaml:"platforms,omitempty"`
+}
+
+// BuildSource contains repo-backed source settings for remote build runners.
+type BuildSource struct {
+	// Type is the source provider. Currently "git" is supported.
+	Type string `yaml:"type,omitempty"`
+
+	// RepoURL is the Git repository URL the runner should fetch.
+	RepoURL string `yaml:"repo_url,omitempty"`
+
+	// Ref is the branch, tag, or commit SHA to check out.
+	Ref string `yaml:"ref,omitempty"`
+
+	// Subdir optionally selects the project directory within the checkout.
+	Subdir string `yaml:"subdir,omitempty"`
+
+	// LFS controls whether the runner should fetch Git LFS objects.
+	LFS bool `yaml:"lfs,omitempty"`
 }
 
 // BuildPlatform represents a platform-specific build configuration.
@@ -324,6 +345,12 @@ type BuildPlatform struct {
 	// Setup is an optional pre-build command run before the main build
 	// (e.g. "npm install && cd ios && pod install").
 	Setup string `yaml:"setup,omitempty"`
+
+	// KeepDerivedData preserves the remote iOS DerivedData cache between builds.
+	KeepDerivedData bool `yaml:"keep_derived_data,omitempty"`
+
+	// RunnerID targets a specific remote build runner DEVICE_ID label.
+	RunnerID string `yaml:"runner_id,omitempty"`
 }
 
 // Defaults contains default settings.

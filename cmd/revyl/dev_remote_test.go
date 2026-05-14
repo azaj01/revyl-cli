@@ -38,14 +38,13 @@ func TestValidateRemoteDevStartFlags(t *testing.T) {
 			},
 		},
 		{
-			name: "android rejected",
+			name: "android valid",
 			setup: func() {
 				devStartPlatform = "android"
 				devStartNoBuild = false
 				devStartBuildVerID = ""
 				devStartTunnelURL = ""
 			},
-			wantErr: "supports iOS only",
 		},
 		{
 			name: "no build rejected",

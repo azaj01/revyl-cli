@@ -745,7 +745,7 @@ func (m *Manager) monitorLocalDevServerHealth(ctx context.Context, devServer Dev
 }
 
 func localHealthCheckConnectionRefused(check DiagnosticCheck) bool {
-	return strings.Contains(strings.ToLower(check.Detail), "connection refused")
+	return isConnectionRefusedMessage(check.Detail)
 }
 
 func runtimeFailureFromLocalHealthCheck(check DiagnosticCheck, localPort int) (RuntimeFailure, bool) {

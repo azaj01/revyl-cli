@@ -111,6 +111,11 @@ func isLocalConnectionRefused(err error) bool {
 	if errors.Is(err, syscall.ECONNREFUSED) {
 		return true
 	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "connection refused")
+	return isConnectionRefusedMessage(err.Error())
+}
+
+func isConnectionRefusedMessage(message string) bool {
+	msg := strings.ToLower(message)
+	return strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "actively refused")
 }

@@ -25,29 +25,145 @@ import (
 )
 
 var remoteBuildPollInterval = 3 * time.Second
+var remoteBuildDefaultTimeout = 30 * time.Minute
 
-// runRemoteBuild packages the local source via git archive, uploads it,
-// triggers a remote iOS build on a dedicated cloud runner, and polls
-// until the build completes or fails.
-//
-// Parameters:
-//   - cmd: The cobra command (used for context).
-//   - apiKey: Authenticated API key.
-//
-// Returns:
-//   - error: Any error encountered during the process.
+type remoteBuildRunnerAvailabilityDecision int
+
+const (
+	remoteBuildRunnerAvailabilityUnknown remoteBuildRunnerAvailabilityDecision = iota
+	remoteBuildRunnerAvailabilityAvailable
+	remoteBuildRunnerAvailabilityUnavailable
+)
+
+type remoteBuildOptions struct {
+	Platform        string
+	AppID           string
+	Version         string
+	SetCurrent      bool
+	Clean           bool
+	JSON            bool
+	Wait            bool
+	IncludeDirty    bool
+	CommittedOnly   bool
+	LegacyUpload    bool
+	KeepDerivedData bool
+	RunnerID        string
+}
+
+type remoteBuildPlatformConfig struct {
+	Platform        string
+	PlatformKey     string
+	Command         string
+	Setup           string
+	Output          string
+	Scheme          string
+	AppID           string
+	Source          config.BuildSource
+	KeepDerivedData bool
+	RunnerID        string
+}
+
+// runBuildRemote is the canonical remote-build UX:
+// `revyl build remote --platform ios|android`.
+func runBuildRemote(cmd *cobra.Command, args []string) error {
+	if v, _ := cmd.Flags().GetBool("json"); v {
+		remoteJSONFlag = true
+	}
+	if v, _ := cmd.Root().PersistentFlags().GetBool("json"); v {
+		remoteJSONFlag = true
+	}
+	if remoteJSONFlag {
+		ui.SetQuietMode(true)
+		defer ui.SetQuietMode(false)
+	}
+
+	apiKey, err := getAPIKey()
+	if err != nil {
+		return err
+	}
+
+	return runRemoteBuildWithOptions(cmd, apiKey, remoteBuildOptions{
+		Platform:        remotePlatformFlag,
+		AppID:           remoteAppFlag,
+		Version:         remoteVersionFlag,
+		SetCurrent:      remoteSetCurrFlag,
+		Clean:           remoteCleanFlag,
+		JSON:            remoteJSONFlag,
+		Wait:            !remoteNoWaitFlag,
+		IncludeDirty:    !remoteCommittedOnly,
+		CommittedOnly:   remoteCommittedOnly,
+		KeepDerivedData: remoteKeepDDFlag,
+		RunnerID:        remoteRunnerFlag,
+	})
+}
+
+// runRemoteBuild packages source, uploads it, triggers a remote build on a
+// dedicated cloud runner, and polls until completion. This wrapper preserves
+// `revyl build upload --remote` compatibility.
 func runRemoteBuild(cmd *cobra.Command, apiKey string) error {
+	includeDirty, _ := cmd.Flags().GetBool("include-dirty")
+	platform := uploadPlatformFlag
+	if strings.TrimSpace(platform) == "" {
+		platform = "ios"
+	}
+	return runRemoteBuildWithOptions(cmd, apiKey, remoteBuildOptions{
+		Platform:        platform,
+		AppID:           uploadAppFlag,
+		Version:         buildVersion,
+		SetCurrent:      buildSetCurr,
+		Clean:           uploadCleanFlag,
+		JSON:            buildUploadJSON,
+		Wait:            true,
+		IncludeDirty:    includeDirty,
+		CommittedOnly:   !includeDirty,
+		LegacyUpload:    true,
+		KeepDerivedData: false,
+	})
+}
+
+func runRemoteBuildWithOptions(cmd *cobra.Command, apiKey string, opts remoteBuildOptions) error {
 	ctx := cmd.Context()
 	devMode, _ := cmd.Flags().GetBool("dev")
 	client := api.NewClientWithDevMode(apiKey, devMode)
 
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get working directory: %w", err)
+	}
+
+	resolved, err := resolveRemoteBuildPlatform(cwd, opts.Platform, opts.AppID)
+	if err != nil {
+		if opts.JSON {
+			printRemoteBuildJSON(remoteBuildJSONResult{
+				Status:   "failed",
+				Platform: opts.Platform,
+				Error:    err.Error(),
+				Phase:    "configuration",
+			})
+		}
+		return err
+	}
+
 	// ── 1. Pre-flight: verify a build runner is online for this org ──
 	ui.PrintInfo("Checking build runner availability…")
-	runnerStatus, runnerErr := client.CheckBuildRunnersAvailable(ctx)
-	if runnerErr != nil {
-		ui.PrintWarning("Could not verify runner availability: %v (proceeding anyway)", runnerErr)
-	} else if !runnerStatus.Available {
-		ui.PrintError("No iOS build runners are available for your organisation.")
+	runnerID := strings.TrimSpace(opts.RunnerID)
+	if runnerID == "" {
+		runnerID = strings.TrimSpace(resolved.RunnerID)
+	}
+	runnerStatus, runnerErr := client.CheckBuildRunnersAvailable(ctx, resolved.Platform, runnerID)
+	switch decideRemoteBuildRunnerAvailability(runnerStatus, runnerErr) {
+	case remoteBuildRunnerAvailabilityUnknown:
+		if runnerErr != nil {
+			ui.PrintWarning("Could not verify runner availability: %v (proceeding anyway)", runnerErr)
+		} else {
+			ui.PrintWarning("Could not confirm runner availability (proceeding anyway)")
+		}
+	case remoteBuildRunnerAvailabilityUnavailable:
+		if runnerID != "" {
+			ui.PrintError("No %s build runner with ID %q is available for your organisation.", resolved.Platform, runnerID)
+		} else {
+			ui.PrintError("No %s build runners are available for your organisation.", resolved.Platform)
+		}
 		ui.PrintError("")
 		ui.PrintError("Remote builds require a dedicated build runner assigned to your org.")
 		ui.PrintError("This can happen if:")
@@ -58,100 +174,146 @@ func runRemoteBuild(cmd *cobra.Command, apiKey string) error {
 		ui.PrintError("What to do:")
 		ui.PrintError("  - Try again in a few minutes (runners may be restarting)")
 		ui.PrintError("  - Contact support to provision a build runner for your org")
-		ui.PrintError("  - Build locally with: revyl build upload --platform ios")
+		ui.PrintError("  - Build locally with: revyl build upload --platform %s", resolved.Platform)
+		if opts.JSON {
+			printRemoteBuildJSON(remoteBuildJSONResult{
+				Status:       "failed",
+				Platform:     resolved.Platform,
+				AppID:        resolved.AppID,
+				Phase:        "runner_availability",
+				Error:        "no build runners available for your organisation",
+				SuggestedFix: "Try again shortly or provision a dedicated build runner for this org.",
+			})
+		}
 		return fmt.Errorf("no build runners available for your organisation")
-	} else if runnerStatus.RunnerCount < 0 {
-		ui.PrintWarning("Could not confirm runner availability (proceeding anyway)")
-	} else if runnerStatus.RunnerCount > 0 {
-		ui.PrintInfo("Found %d active build runner(s) for your org", runnerStatus.RunnerCount)
-	}
-
-	// ── 2. Detect build system and command ────────────────────────
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("failed to get working directory: %w", err)
-	}
-
-	platform := uploadPlatformFlag
-	if platform == "" {
-		platform = "ios"
-	}
-
-	if platform != "ios" {
-		return fmt.Errorf("remote builds currently only support iOS")
-	}
-
-	// Try to detect build command from project config or auto-detection
-	buildCmd, scheme, setupCmd, err := detectBuildCommand(cwd, platform)
-	if err != nil {
-		return fmt.Errorf("failed to detect build command: %w", err)
-	}
-
-	// ── 3. Resolve app ───────────────────────────────────────────
-	appID, err := resolveAppForRemoteBuild(ctx, client, platform)
-	if err != nil {
-		return err
-	}
-
-	ui.PrintInfo("Starting remote build for app %s", appID)
-
-	// ── 4. Package source via git archive ────────────────────────
-	ui.PrintInfo("Packaging source code…")
-
-	if dirty, count := checkDirtyTree(cwd); dirty {
-		ui.PrintWarning("%d file(s) have uncommitted changes and will NOT be included in the remote build.", count)
-		ui.PrintWarning("Commit your changes first, or use --include-dirty to proceed anyway.")
-		includeDirty, _ := cmd.Flags().GetBool("include-dirty")
-		if !includeDirty {
-			return fmt.Errorf("uncommitted changes detected; commit or pass --include-dirty")
+	case remoteBuildRunnerAvailabilityAvailable:
+		if runnerStatus.RunnerCount > 0 {
+			ui.PrintInfo("Found %d active build runner(s) for your org", runnerStatus.RunnerCount)
 		}
 	}
 
-	archivePath, err := createSourceArchive(cwd)
-	if err != nil {
-		return fmt.Errorf("failed to package source: %w", err)
-	}
-	defer os.Remove(archivePath)
+	ui.PrintInfo("Starting remote %s build for app %s", resolved.Platform, resolved.AppID)
 
-	archiveInfo, _ := os.Stat(archivePath)
-	sizeMB := float64(archiveInfo.Size()) / (1024 * 1024)
-	ui.PrintInfo("Source archive: %.1f MB", sizeMB)
+	var uploadResp *api.RemoteBuildSourceUploadResponse
+	var repoSource *config.BuildSource
+	var sourcePatchKey string
+	if remoteBuildUsesGitSource(resolved.Source) {
+		normalized := normalizeRemoteGitSource(resolved.Source)
+		repoSource = &normalized
+		ui.PrintInfo("Using repo-backed Git source: %s", normalized.RepoURL)
+		if normalized.Ref != "" {
+			ui.PrintInfo("Git ref: %s", normalized.Ref)
+		}
+		if normalized.Subdir != "" {
+			ui.PrintInfo("Git subdir: %s", normalized.Subdir)
+		}
+		if dirty, count := checkDirtyTree(cwd); dirty {
+			if opts.CommittedOnly || !opts.IncludeDirty {
+				ui.PrintWarning("%d file(s) have uncommitted changes and will NOT be included in the remote build.", count)
+			} else {
+				patchPath, empty, err := createRepoBackedSourcePatch(cwd)
+				if err != nil {
+					return fmt.Errorf("failed to create repo-backed source patch: %w", err)
+				}
+				defer os.Remove(patchPath)
+				if empty {
+					ui.PrintWarning("Working tree is dirty, but no tracked diff was found for the repo-backed source patch.")
+				} else {
+					patchResp, err := uploadRemoteBuildSourceFile(ctx, client, resolved.AppID, "source.patch", patchPath)
+					if err != nil {
+						return fmt.Errorf("failed to upload repo-backed source patch: %w", err)
+					}
+					sourcePatchKey = patchResp.SourceKey
+					ui.PrintSuccess("Source patch uploaded")
+				}
+			}
+		}
+	} else {
+		// ── 4. Package source via git archive ────────────────────────
+		ui.PrintInfo("Packaging source code…")
 
-	if sizeMB > 500 {
-		return fmt.Errorf("source archive too large (%.0f MB). Max 500 MB", sizeMB)
-	}
+		if dirty, count := checkDirtyTree(cwd); dirty {
+			if opts.CommittedOnly || !opts.IncludeDirty {
+				ui.PrintWarning("%d file(s) have uncommitted changes and will NOT be included in the remote build.", count)
+				if opts.LegacyUpload {
+					ui.PrintWarning("Commit your changes first, or use --include-dirty to proceed anyway.")
+				}
+			}
+			if opts.LegacyUpload && !opts.IncludeDirty {
+				return fmt.Errorf("uncommitted changes detected; commit or pass --include-dirty")
+			}
+		}
 
-	// ── 5. Get presigned upload URL ──────────────────────────────
-	ui.PrintInfo("Uploading source to Revyl…")
-	uploadResp, err := client.GetRemoteBuildUploadURL(ctx, appID, "source.tar.gz", archiveInfo.Size())
-	if err != nil {
-		return fmt.Errorf("failed to get upload URL: %w", err)
-	}
+		var archivePath string
+		if opts.IncludeDirty && !opts.CommittedOnly {
+			archivePath, err = createSourceArchiveIncludingWorkingTree(cwd)
+		} else {
+			archivePath, err = createSourceArchive(cwd)
+		}
+		if err != nil {
+			return fmt.Errorf("failed to package source: %w", err)
+		}
+		defer os.Remove(archivePath)
 
-	// ── 6. Upload source archive to S3 via presigned POST ────────
-	var uploadFields map[string]string
-	if uploadResp.UploadFields != nil {
-		uploadFields = *uploadResp.UploadFields
-	}
-	if err := client.UploadFileToPresignedPost(ctx, uploadResp.UploadUrl, uploadFields, archivePath); err != nil {
-		return fmt.Errorf("failed to upload source: %w", err)
-	}
+		archiveInfo, _ := os.Stat(archivePath)
+		sizeMB := float64(archiveInfo.Size()) / (1024 * 1024)
+		ui.PrintInfo("Source archive: %.1f MB", sizeMB)
 
-	ui.PrintSuccess("Source uploaded")
+		if sizeMB > 500 {
+			return fmt.Errorf("source archive too large (%.0f MB). Max 500 MB", sizeMB)
+		}
+
+		// ── 5. Get presigned upload URL ──────────────────────────────
+		ui.PrintInfo("Uploading source to Revyl…")
+		uploadResp, err = client.GetRemoteBuildUploadURL(ctx, resolved.AppID, "source.tar.gz", archiveInfo.Size())
+		if err != nil {
+			return fmt.Errorf("failed to get upload URL: %w", err)
+		}
+
+		// ── 6. Upload source archive to S3 via presigned POST ────────
+		var uploadFields map[string]string
+		if uploadResp.UploadFields != nil {
+			uploadFields = *uploadResp.UploadFields
+		}
+		if err := client.UploadFileToPresignedPost(ctx, uploadResp.UploadUrl, uploadFields, archivePath); err != nil {
+			return fmt.Errorf("failed to upload source: %w", err)
+		}
+
+		ui.PrintSuccess("Source uploaded")
+	}
 
 	// ── 7. Trigger remote build ──────────────────────────────────
 	ui.PrintInfo("Triggering remote build…")
-	setCurrent := buildSetCurr
+	setCurrent := opts.SetCurrent
+	buildCommand := resolved.Command
+	if resolved.Scheme != "" {
+		buildCommand = build.ApplySchemeToCommand(buildCommand, resolved.Scheme)
+	}
+	artifactType := defaultRemoteArtifactType(resolved.Platform)
+	keepDerivedData := opts.KeepDerivedData || resolved.KeepDerivedData
 	triggerReq := &api.RemoteBuildRequest{
-		AppId:        appID,
-		SourceKey:    uploadResp.SourceKey,
-		BuildCommand: buildCmd,
-		BuildScheme:  &scheme,
-		SetupCommand: stringPtrOrNil(setupCmd),
-		CleanBuild:   boolPtrOrNil(uploadCleanFlag),
-		Version:      stringPtrOrNil(buildVersion),
-		SetAsCurrent: &setCurrent,
-		Platform:     &platform,
+		AppId:           resolved.AppID,
+		BuildCommand:    buildCommand,
+		BuildScheme:     stringPtrOrNil(resolved.Scheme),
+		SetupCommand:    stringPtrOrNil(resolved.Setup),
+		CleanBuild:      boolPtrOrNil(opts.Clean),
+		KeepDerivedData: boolPtrOrNil(keepDerivedData),
+		Version:         stringPtrOrNil(opts.Version),
+		SetAsCurrent:    &setCurrent,
+		Platform:        &resolved.Platform,
+		ArtifactPath:    stringPtrOrNil(resolved.Output),
+		ArtifactType:    stringPtrOrNil(artifactType),
+		RunnerId:        stringPtrOrNil(runnerID),
+	}
+	if repoSource != nil {
+		triggerReq.SourceType = stringPtrOrNil(repoSource.Type)
+		triggerReq.SourceRepoUrl = stringPtrOrNil(repoSource.RepoURL)
+		triggerReq.SourceRef = stringPtrOrNil(repoSource.Ref)
+		triggerReq.SourceSubdir = stringPtrOrNil(repoSource.Subdir)
+		triggerReq.SourceLfs = boolPtrOrNil(repoSource.LFS)
+		triggerReq.SourcePatchKey = stringPtrOrNil(sourcePatchKey)
+	} else if uploadResp != nil {
+		triggerReq.SourceKey = stringPtrOrNil(uploadResp.SourceKey)
 	}
 	triggerResp, err := client.TriggerRemoteBuild(ctx, triggerReq)
 	if err != nil {
@@ -161,18 +323,37 @@ func runRemoteBuild(cmd *cobra.Command, apiKey string) error {
 	jobID := triggerResp.BuildJobId
 	ui.PrintInfo("Build queued: %s", jobID)
 
-	// ── 8. Poll for status ───────────────────────────────────────
-	if err := pollBuildStatus(ctx, client, jobID); err != nil {
-		return err
+	if !opts.Wait {
+		if opts.JSON {
+			printRemoteBuildJSON(remoteBuildJSONResult{
+				Status:     "pending",
+				Platform:   resolved.Platform,
+				BuildJobID: jobID,
+				AppID:      resolved.AppID,
+			})
+		}
+		return nil
 	}
 
-	if !buildUploadJSON {
+	// ── 8. Poll for status ───────────────────────────────────────
+	status, err := pollRemoteBuildStatusResultWithTimeout(ctx, client, jobID, remoteBuildTimeoutFromConfig(cwd))
+	if err != nil {
+		if opts.JSON {
+			printRemoteBuildJSON(remoteBuildFailureJSON(resolved, jobID, status, err))
+		}
+		return err
+	}
+	if opts.JSON {
+		printRemoteBuildJSON(remoteBuildSuccessJSON(resolved, jobID, status))
+	}
+
+	if !opts.JSON {
 		cwd, _ := os.Getwd()
 		testsDir := filepath.Join(cwd, ".revyl", "tests")
 		var steps []ui.NextStep
 		steps = append(steps, ui.NextStep{
 			Label:   "Start a device with this build:",
-			Command: fmt.Sprintf("revyl device start --platform %s --app-id %s", platform, appID),
+			Command: fmt.Sprintf("revyl device start --platform %s --app-id %s", resolved.Platform, resolved.AppID),
 		})
 		if aliases := config.ListLocalTestAliases(testsDir); len(aliases) > 0 {
 			steps = append(steps, ui.NextStep{
@@ -189,6 +370,26 @@ func runRemoteBuild(cmd *cobra.Command, apiKey string) error {
 	}
 
 	return nil
+}
+
+func decideRemoteBuildRunnerAvailability(status *api.BuildRunnerStatus, err error) remoteBuildRunnerAvailabilityDecision {
+	if err != nil || status == nil || status.RunnerCount < 0 {
+		return remoteBuildRunnerAvailabilityUnavailable
+	}
+	if !status.Available {
+		return remoteBuildRunnerAvailabilityUnavailable
+	}
+	return remoteBuildRunnerAvailabilityAvailable
+}
+
+func remoteBuildTimeoutFromConfig(cwd string) time.Duration {
+	configPath := filepath.Join(cwd, ".revyl", "config.yaml")
+	cfg, err := config.LoadProjectConfig(configPath)
+	if err != nil {
+		return remoteBuildDefaultTimeout
+	}
+	seconds := config.EffectiveTimeoutSeconds(cfg, int(remoteBuildDefaultTimeout.Seconds()))
+	return time.Duration(seconds) * time.Second
 }
 
 // detectBuildCommand determines the xcodebuild command for the project.
@@ -273,6 +474,205 @@ func resolveAppForRemoteBuild(ctx context.Context, client *api.Client, platform 
 	return "", fmt.Errorf("no app specified. Use --app <name-or-id> or configure in .revyl/config.yaml")
 }
 
+func resolveRemoteBuildPlatform(cwd, rawPlatform, appOverride string) (remoteBuildPlatformConfig, error) {
+	platform := strings.TrimSpace(strings.ToLower(rawPlatform))
+	if platform == "" {
+		platform = "ios"
+	}
+	if platform != "ios" && platform != "android" {
+		return remoteBuildPlatformConfig{}, fmt.Errorf("platform must be ios or android")
+	}
+
+	configPath := filepath.Join(cwd, ".revyl", "config.yaml")
+	cfg, cfgErr := config.LoadProjectConfig(configPath)
+	if cfgErr == nil {
+		key := platform
+		platCfg, ok := cfg.Build.Platforms[key]
+		if !ok {
+			if picked := pickBestBuildPlatformKey(cfg, platform); picked != "" {
+				key = picked
+				platCfg = cfg.Build.Platforms[picked]
+				ok = true
+			}
+		}
+		if ok && strings.TrimSpace(platCfg.Command) != "" {
+			appID := strings.TrimSpace(appOverride)
+			if appID == "" {
+				appID = strings.TrimSpace(platCfg.AppID)
+			}
+			if appID == "" {
+				return remoteBuildPlatformConfig{}, fmt.Errorf("no app specified. Use --app <id> or configure build.platforms.%s.app_id in .revyl/config.yaml", key)
+			}
+			return remoteBuildPlatformConfig{
+				Platform:        platform,
+				PlatformKey:     key,
+				Command:         strings.TrimSpace(platCfg.Command),
+				Setup:           strings.TrimSpace(platCfg.Setup),
+				Output:          strings.TrimSpace(platCfg.Output),
+				Scheme:          strings.TrimSpace(resolveRemoteBuildScheme(platform, platCfg.Scheme)),
+				AppID:           appID,
+				Source:          cfg.Build.Source,
+				KeepDerivedData: platCfg.KeepDerivedData,
+				RunnerID:        strings.TrimSpace(platCfg.RunnerID),
+			}, nil
+		}
+	}
+
+	detected, err := build.Detect(cwd)
+	if err != nil {
+		return remoteBuildPlatformConfig{}, fmt.Errorf("could not detect build system: %w", err)
+	}
+	if detected == nil {
+		return remoteBuildPlatformConfig{}, fmt.Errorf("no build system detected in %s", cwd)
+	}
+	platBuild, ok := detected.Platforms[platform]
+	if !ok || strings.TrimSpace(platBuild.Command) == "" {
+		return remoteBuildPlatformConfig{}, fmt.Errorf(
+			"no %s build configuration found. Add build.platforms.%s.command to .revyl/config.yaml or run 'revyl init'",
+			platform, platform,
+		)
+	}
+	appID := strings.TrimSpace(appOverride)
+	if appID == "" {
+		return remoteBuildPlatformConfig{}, fmt.Errorf("no app specified. Use --app <id> or configure build.platforms.%s.app_id in .revyl/config.yaml", platform)
+	}
+	return remoteBuildPlatformConfig{
+		Platform:    platform,
+		PlatformKey: platform,
+		Command:     strings.TrimSpace(platBuild.Command),
+		Output:      strings.TrimSpace(platBuild.Output),
+		Scheme:      strings.TrimSpace(resolveRemoteBuildScheme(platform, "")),
+		AppID:       appID,
+	}, nil
+}
+
+func resolveRemoteBuildScheme(platform, configured string) string {
+	if platform != "ios" {
+		return ""
+	}
+	if strings.TrimSpace(uploadSchemeFlag) != "" {
+		return strings.TrimSpace(uploadSchemeFlag)
+	}
+	return strings.TrimSpace(configured)
+}
+
+func remoteBuildUsesGitSource(source config.BuildSource) bool {
+	return strings.EqualFold(strings.TrimSpace(source.Type), "git") && strings.TrimSpace(source.RepoURL) != ""
+}
+
+func normalizeRemoteGitSource(source config.BuildSource) config.BuildSource {
+	source.Type = strings.ToLower(strings.TrimSpace(source.Type))
+	source.RepoURL = strings.TrimSpace(source.RepoURL)
+	source.Ref = strings.TrimSpace(source.Ref)
+	source.Subdir = strings.Trim(strings.TrimSpace(source.Subdir), "/")
+	return source
+}
+
+func defaultRemoteArtifactType(platform string) string {
+	if platform == "android" {
+		return "apk"
+	}
+	return "app"
+}
+
+type remoteBuildJSONResult struct {
+	Status             string   `json:"status"`
+	Platform           string   `json:"platform,omitempty"`
+	BuildJobID         string   `json:"build_job_id,omitempty"`
+	BuildVersionID     string   `json:"build_version_id,omitempty"`
+	Version            string   `json:"version,omitempty"`
+	ArtifactType       string   `json:"artifact_type,omitempty"`
+	PackageID          string   `json:"package_id,omitempty"`
+	AppID              string   `json:"app_id,omitempty"`
+	LogsTail           string   `json:"logs_tail,omitempty"`
+	Phase              string   `json:"phase,omitempty"`
+	Error              string   `json:"error,omitempty"`
+	SuggestedFix       string   `json:"suggested_fix,omitempty"`
+	CandidateArtifacts []string `json:"candidate_artifacts,omitempty"`
+}
+
+func remoteBuildSuccessJSON(resolved remoteBuildPlatformConfig, jobID string, status *api.RemoteBuildStatusResponse) remoteBuildJSONResult {
+	result := remoteBuildJSONResult{
+		Status:       "success",
+		Platform:     resolved.Platform,
+		BuildJobID:   jobID,
+		ArtifactType: defaultRemoteArtifactType(resolved.Platform),
+		AppID:        resolved.AppID,
+	}
+	if status == nil {
+		return result
+	}
+	if status.VersionId != nil {
+		result.BuildVersionID = strings.TrimSpace(*status.VersionId)
+	}
+	if status.Version != nil {
+		result.Version = strings.TrimSpace(*status.Version)
+	}
+	if status.ArtifactType != nil && strings.TrimSpace(*status.ArtifactType) != "" {
+		result.ArtifactType = strings.TrimSpace(*status.ArtifactType)
+	}
+	if status.PackageId != nil {
+		result.PackageID = strings.TrimSpace(*status.PackageId)
+	}
+	if status.AppId != nil && strings.TrimSpace(*status.AppId) != "" {
+		result.AppID = strings.TrimSpace(*status.AppId)
+	}
+	if status.LogsTail != nil {
+		result.LogsTail = *status.LogsTail
+	}
+	return result
+}
+
+func remoteBuildFailureJSON(resolved remoteBuildPlatformConfig, jobID string, status *api.RemoteBuildStatusResponse, err error) remoteBuildJSONResult {
+	result := remoteBuildJSONResult{
+		Status:     "failed",
+		Platform:   resolved.Platform,
+		BuildJobID: jobID,
+		AppID:      resolved.AppID,
+		Error:      err.Error(),
+	}
+	if status == nil {
+		return result
+	}
+	if status.Status == "cancelled" {
+		result.Status = "cancelled"
+	}
+	if status.Error != nil && strings.TrimSpace(*status.Error) != "" {
+		result.Error = strings.TrimSpace(*status.Error)
+	}
+	if status.Phase != nil {
+		result.Phase = strings.TrimSpace(*status.Phase)
+	}
+	if status.SuggestedFix != nil {
+		result.SuggestedFix = strings.TrimSpace(*status.SuggestedFix)
+	}
+	if status.CandidateArtifacts != nil {
+		result.CandidateArtifacts = append([]string(nil), (*status.CandidateArtifacts)...)
+	}
+	if status.LogsTail != nil {
+		result.LogsTail = *status.LogsTail
+	}
+	if status.ArtifactType != nil {
+		result.ArtifactType = strings.TrimSpace(*status.ArtifactType)
+	}
+	if status.PackageId != nil {
+		result.PackageID = strings.TrimSpace(*status.PackageId)
+	}
+	if status.VersionId != nil {
+		result.BuildVersionID = strings.TrimSpace(*status.VersionId)
+	}
+	if status.Version != nil {
+		result.Version = strings.TrimSpace(*status.Version)
+	}
+	return result
+}
+
+func printRemoteBuildJSON(result remoteBuildJSONResult) {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(result)
+}
+
 // createSourceArchive runs git archive to create a tar.gz of the project
 // directory at HEAD.  When cwd is a subdirectory of a larger repo (e.g. a
 // monorepo), only the subtree rooted at cwd is archived so the build
@@ -342,6 +742,48 @@ func createSourceArchive(cwd string) (string, error) {
 	}
 
 	return tmpFile.Name(), nil
+}
+
+func createRepoBackedSourcePatch(cwd string) (string, bool, error) {
+	tmpFile, err := os.CreateTemp("", "revyl-source-patch-*.patch")
+	if err != nil {
+		return "", false, fmt.Errorf("failed to create temp patch: %w", err)
+	}
+	defer tmpFile.Close()
+
+	cmd := exec.Command("git", "diff", "--binary", "HEAD")
+	cmd.Dir = cwd
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		os.Remove(tmpFile.Name())
+		return "", false, fmt.Errorf("git diff failed: %w\n%s", err, stderr.String())
+	}
+	if _, err := tmpFile.Write(out); err != nil {
+		os.Remove(tmpFile.Name())
+		return "", false, fmt.Errorf("failed to write patch: %w", err)
+	}
+	return tmpFile.Name(), len(bytes.TrimSpace(out)) == 0, nil
+}
+
+func uploadRemoteBuildSourceFile(ctx context.Context, client *api.Client, appID, filename, path string) (*api.RemoteBuildSourceUploadResponse, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat %s: %w", filename, err)
+	}
+	resp, err := client.GetRemoteBuildUploadURL(ctx, appID, filename, info.Size())
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]string
+	if resp.UploadFields != nil {
+		fields = *resp.UploadFields
+	}
+	if err := client.UploadFileToPresignedPost(ctx, resp.UploadUrl, fields, path); err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 // createSourceArchiveIncludingWorkingTree creates a tar.gz from the current
@@ -580,13 +1022,19 @@ func pathBase(rel string) string {
 // Returns:
 //   - error: If the build fails or polling encounters an error.
 func pollBuildStatus(ctx context.Context, client *api.Client, jobID string) error {
+	return pollBuildStatusWithTimeout(ctx, client, jobID, remoteBuildDefaultTimeout)
+}
+
+func pollBuildStatusWithTimeout(ctx context.Context, client *api.Client, jobID string, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = remoteBuildDefaultTimeout
+	}
 	ticker := time.NewTicker(remoteBuildPollInterval)
 	defer ticker.Stop()
 
 	lastStatus := ""
 	lastLogLines := 0
 	startTime := time.Now()
-	timeout := 30 * time.Minute
 
 	cancelBuild := func(reason string) {
 		ui.PrintWarning("Cancelling remote build (%s)…", reason)

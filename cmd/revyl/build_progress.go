@@ -25,6 +25,11 @@ type BuildProgressResult struct {
 	Err error
 }
 
+type BuildProgressHooks struct {
+	OnLine        func(line string)
+	OnQuietPeriod func(lineCount int, elapsed time.Duration, recentLines []string)
+}
+
 // RunBuildWithProgress executes a build command using the given runner and
 // displays live progress via a spinner, line count, and periodic quiet-period
 // recaps. This centralises the build-progress UX used by both `revyl dev`
@@ -39,6 +44,10 @@ type BuildProgressResult struct {
 // Returns:
 //   - BuildProgressResult: Timing, captured output, and any error.
 func RunBuildWithProgress(runner *build.Runner, command, platformKey string, recapInterval time.Duration) BuildProgressResult {
+	return RunBuildWithProgressWithHooks(runner, command, platformKey, recapInterval, nil)
+}
+
+func RunBuildWithProgressWithHooks(runner *build.Runner, command, platformKey string, recapInterval time.Duration, hooks *BuildProgressHooks) BuildProgressResult {
 	var result BuildProgressResult
 	showSpinner := !ui.IsDebugMode()
 
@@ -75,6 +84,9 @@ func RunBuildWithProgress(runner *build.Runner, command, platformKey string, rec
 					count := lineCount
 					mu.Unlock()
 					if len(snap) > 0 {
+						if hooks != nil && hooks.OnQuietPeriod != nil {
+							hooks.OnQuietPeriod(count, time.Since(start), snap)
+						}
 						ui.StopSpinner()
 						printBuildRecap(platformKey, snap, time.Since(start))
 						ui.StartSpinner(buildProgressMessage(platformKey, count))
@@ -93,6 +105,10 @@ func RunBuildWithProgress(runner *build.Runner, command, platformKey string, rec
 		recentLines = appendBuildLine(recentLines, line, 5)
 		count := lineCount
 		mu.Unlock()
+
+		if hooks != nil && hooks.OnLine != nil {
+			hooks.OnLine(line)
+		}
 
 		if showSpinner {
 			ui.StopSpinner()

@@ -579,12 +579,13 @@ func TestPrintDevReadyFooter_PrintsInteractionShortcuts(t *testing.T) {
 	})
 
 	output := captureStdoutAndStderr(t, func() {
-		printDevReadyFooter("https://viewer.example", "nof1://expo-development-client/?url=https%3A%2F%2Ftunnel.example", false, false, false, "default", 0)
+		printDevReadyFooter("http://127.0.0.1:3232", "https://viewer.example", "nof1://expo-development-client/?url=https%3A%2F%2Ftunnel.example", false, false, false, "default", 0)
 	})
 
 	for _, expected := range []string{
 		"Dev loop ready",
-		"Viewer:",
+		"Local cockpit:",
+		"Hosted viewer:",
 		"Deep Link:",
 		"[r] rebuild native + reinstall",
 		"[q]/Ctrl+C quit",
@@ -618,6 +619,18 @@ func TestPrintDevReadyFooter_PrintsInteractionShortcuts(t *testing.T) {
 	}
 }
 
+func TestDevBrowserOpenTargetPrefersLocalCockpit(t *testing.T) {
+	hosted := "https://app.revyl.ai/sessions/sess-123"
+	local := "http://127.0.0.1:3232"
+
+	if got := devBrowserOpenTarget(local, hosted); got != local {
+		t.Fatalf("devBrowserOpenTarget() = %q, want local cockpit", got)
+	}
+	if got := devBrowserOpenTarget("", hosted); got != hosted {
+		t.Fatalf("devBrowserOpenTarget() = %q, want hosted viewer fallback", got)
+	}
+}
+
 func TestPrintDevReadyFooter_SessionIndexInCommandHints(t *testing.T) {
 	ui.SetQuietMode(false)
 	t.Cleanup(func() {
@@ -625,7 +638,7 @@ func TestPrintDevReadyFooter_SessionIndexInCommandHints(t *testing.T) {
 	})
 
 	output := captureStdoutAndStderr(t, func() {
-		printDevReadyFooter("https://viewer.example", "nof1://example", false, false, false, "ios-main", 2)
+		printDevReadyFooter("", "https://viewer.example", "nof1://example", false, false, false, "ios-main", 2)
 	})
 
 	for _, expected := range []string{
@@ -717,7 +730,7 @@ func TestPrintDevReadyFooter_QuietModeSuppressesInteractionHints(t *testing.T) {
 	})
 
 	output := captureStdout(t, func() {
-		printDevReadyFooter("https://viewer.example", "nof1://example", false, false, false, "default", 0)
+		printDevReadyFooter("", "https://viewer.example", "nof1://example", false, false, false, "default", 0)
 	})
 
 	if strings.Contains(output, "Try device interactions:") {
@@ -738,7 +751,7 @@ func TestPrintDevReadyFooter_BareRN_ShowsTunnelURLInsteadOfDeepLink(t *testing.T
 	})
 
 	output := captureStdoutAndStderr(t, func() {
-		printDevReadyFooter("https://viewer.example", "https://abc-def.trycloudflare.com", false, true, false, "default", 0)
+		printDevReadyFooter("", "https://viewer.example", "https://abc-def.trycloudflare.com", false, true, false, "default", 0)
 	})
 
 	if !strings.Contains(output, "Tunnel URL:") {
@@ -756,7 +769,7 @@ func TestPrintDevReadyFooter_Expo_ShowsDeepLink(t *testing.T) {
 	})
 
 	output := captureStdoutAndStderr(t, func() {
-		printDevReadyFooter("https://viewer.example", "nof1://expo-development-client/?url=https%3A%2F%2Ftunnel.example", false, false, false, "default", 0)
+		printDevReadyFooter("", "https://viewer.example", "nof1://expo-development-client/?url=https%3A%2F%2Ftunnel.example", false, false, false, "default", 0)
 	})
 
 	if !strings.Contains(output, "Deep Link:") {
@@ -1299,6 +1312,69 @@ func TestWriteDevStatus_Success(t *testing.T) {
 	if ds.LastRebuild.FilesChanged != 2 {
 		t.Fatalf("expected files_changed=2, got %d", ds.LastRebuild.FilesChanged)
 	}
+	if len(ds.LastRebuild.Logs) == 0 {
+		t.Fatal("expected rebuild logs to be persisted")
+	}
+	if ds.LastRebuild.Logs[0].Kind != "success" {
+		t.Fatalf("expected synthesized success log, got %#v", ds.LastRebuild.Logs[0])
+	}
+}
+
+func TestWriteDevStatusRebuildStarted(t *testing.T) {
+	dir := t.TempDir()
+	statusPath := dir + "/status.json"
+
+	writeDevStatusRebuildStarted(
+		statusPath,
+		&mcppkg.DeviceSession{SessionID: "sess-123"},
+		"https://app.revyl.ai/sessions/sess-123",
+		"https://hr-abc.revyl.ai",
+		"myapp://expo-development-client/?url=https://hr-abc.revyl.ai",
+		"relay",
+		"ios",
+		4,
+		true,
+		"ios-dev",
+	)
+
+	data, err := os.ReadFile(statusPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	var ds devStatus
+	if err := json.Unmarshal(data, &ds); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if ds.State != "building" {
+		t.Fatalf("expected state=building, got %s", ds.State)
+	}
+	if ds.RebuildCount != 4 {
+		t.Fatalf("expected rebuild_count=4, got %d", ds.RebuildCount)
+	}
+	if ds.LastRebuild == nil {
+		t.Fatal("expected last_rebuild to be non-nil")
+	}
+	if ds.LastRebuild.Status != "running" {
+		t.Fatalf("expected status=running, got %s", ds.LastRebuild.Status)
+	}
+	if ds.LastRebuild.PushMode != "pending" {
+		t.Fatalf("expected push_mode=pending, got %s", ds.LastRebuild.PushMode)
+	}
+	if len(ds.LastRebuild.Logs) < 2 {
+		t.Fatalf("expected started rebuild logs, got %#v", ds.LastRebuild.Logs)
+	}
+	if !strings.Contains(ds.LastRebuild.Logs[1].Message, "ios-dev") {
+		t.Fatalf("expected platform key in rebuild log, got %#v", ds.LastRebuild.Logs)
+	}
+}
+
+func TestSanitizeDevRebuildLogMessage(t *testing.T) {
+	got := sanitizeDevRebuildLogMessage("\x1b[2K\rBuild\tline\x00\x1b[31mfailed\x1b[0m")
+	want := "Build line failed"
+	if got != want {
+		t.Fatalf("sanitizeDevRebuildLogMessage() = %q, want %q", got, want)
+	}
 }
 
 func TestWriteDevStatus_BuildFailure(t *testing.T) {
@@ -1334,6 +1410,9 @@ func TestWriteDevStatus_BuildFailure(t *testing.T) {
 	}
 	if ds.LastRebuild.BuildErrors[0].File != "LoginView.swift" {
 		t.Fatalf("expected LoginView.swift, got %s", ds.LastRebuild.BuildErrors[0].File)
+	}
+	if len(ds.LastRebuild.Logs) == 0 || ds.LastRebuild.Logs[0].Kind != "error" {
+		t.Fatalf("expected error rebuild log, got %#v", ds.LastRebuild.Logs)
 	}
 }
 

@@ -302,6 +302,10 @@ revyl build upload                       # Build and upload (--dry-run to previe
 revyl build upload --platform android    # Build for a specific platform
 revyl build upload --file ./app.apk --app <id>  # Upload a local artifact directly
 revyl build upload --url <artifact-url> --app <id>  # Ingest from a remote URL
+revyl build remote --platform ios        # Build on a dedicated remote runner
+revyl build remote --platform android --json  # Remote Android build for agents
+revyl build upload --remote --platform ios      # Compatibility alias for remote build
+revyl build upload --remote --platform android  # Compatibility alias for remote build
 revyl build list                         # List uploaded builds
 revyl build list --app <app-id>          # List builds for a specific app
 revyl build delete <app-id>              # Delete a build (all versions)

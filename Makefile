@@ -82,28 +82,7 @@ clean:
 ## test: Run tests with summary
 test:
 	@echo "Running tests..."
-	@JSONFILE=$$(mktemp /tmp/revyl-test-XXXXXX.json) ; \
-	if command -v gotestsum &> /dev/null; then \
-		gotestsum --format testdox --jsonfile "$$JSONFILE" ./... ; \
-		TEST_EXIT=$$? ; \
-	else \
-		$(GOTEST) -json ./... > "$$JSONFILE" ; \
-		TEST_EXIT=$$? ; \
-	fi ; \
-	PASSED=$$(grep '"Action":"pass"' "$$JSONFILE" | grep -c '"Test":' || true) ; \
-	FAILED=$$(grep '"Action":"fail"' "$$JSONFILE" | grep -c '"Test":' || true) ; \
-	SKIPPED=$$(grep '"Action":"skip"' "$$JSONFILE" | grep -c '"Test":' || true) ; \
-	TOTAL=$$((PASSED + FAILED + SKIPPED)) ; \
-	echo "" ; \
-	echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" ; \
-	if [ "$$FAILED" -gt 0 ]; then \
-		echo "  FAIL: $$PASSED passed, $$FAILED failed, $$SKIPPED skipped ($$TOTAL total)" ; \
-	else \
-		echo "  OK: $$PASSED passed, $$SKIPPED skipped ($$TOTAL total)" ; \
-	fi ; \
-	echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" ; \
-	rm -f "$$JSONFILE" ; \
-	exit $$TEST_EXIT
+	@$(SCRIPTS_DIR)/go-test-summary.sh ./...
 
 ## test-coverage: Run tests with coverage
 test-coverage:

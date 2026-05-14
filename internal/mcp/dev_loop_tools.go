@@ -326,6 +326,7 @@ func (s *Server) handleStartDevLoop(ctx context.Context, req *mcp.CallToolReques
 		AppPackage:     strings.TrimSpace(buildDetail.PackageName),
 		AppLink:        deepLinkURL,
 		IdleTimeout:    time.Duration(timeoutSecs) * time.Second,
+		SkipAppInstall: true,
 	})
 	if err != nil {
 		if manager != nil {

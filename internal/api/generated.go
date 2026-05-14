@@ -1328,7 +1328,7 @@ type BuildRunItem struct {
 //
 //	available: Whether at least one build runner is online for the org.
 //	runner_count: Number of active build runners matching the org.
-//	    ``-1`` indicates the Hatchet API was unreachable (fail-open).
+//	    ``-1`` indicates Hatchet availability is unknown.
 type BuildRunnerStatus struct {
 	Available   bool `json:"available"`
 	RunnerCount int  `json:"runner_count"`
@@ -1417,8 +1417,8 @@ type BulkExecuteRequest struct {
 	BuildId *string `json:"build_id"`
 
 	// RunConfig Complete configuration for a test run.
-	RunConfig *TestRunConfig `json:"run_config,omitempty"`
-	TestIds   []string       `json:"test_ids"`
+	RunConfig *TestRunConfigInput `json:"run_config,omitempty"`
+	TestIds   []string            `json:"test_ids"`
 }
 
 // BulkExecuteResponse Response from bulk execution.
@@ -1513,13 +1513,27 @@ type CachedActionElement struct {
 	WaitTimeAfterAction *float32 `json:"wait_time_after_action"`
 }
 
-// CachedActionStore Stores cached action elements for a test, indexed by node_id.
+// CachedActionStoreInput Stores cached action elements for a test, indexed by node_id.
 //
 // Attributes:
 //
 //	test_id (str): The unique identifier for the test.
 //	cached_elements (Dict[str, CachedActionElement]): Dictionary of cached action elements keyed by node_id.
-type CachedActionStore struct {
+type CachedActionStoreInput struct {
+	// CachedElements Dictionary of cached action elements keyed by node_id
+	CachedElements *map[string]CachedActionElement `json:"cached_elements,omitempty"`
+
+	// TestId Unique identifier for the test
+	TestId string `json:"test_id"`
+}
+
+// CachedActionStoreOutput Stores cached action elements for a test, indexed by node_id.
+//
+// Attributes:
+//
+//	test_id (str): The unique identifier for the test.
+//	cached_elements (Dict[str, CachedActionElement]): Dictionary of cached action elements keyed by node_id.
+type CachedActionStoreOutput struct {
 	// CachedElements Dictionary of cached action elements keyed by node_id
 	CachedElements *map[string]CachedActionElement `json:"cached_elements,omitempty"`
 
@@ -2902,8 +2916,49 @@ type ExecuteWorkflowAsyncAPIResponse struct {
 	TaskId *string `json:"task_id,omitempty"`
 }
 
-// ExecutionModeConfig Configuration for execution modes and features.
-type ExecutionModeConfig struct {
+// ExecutionModeConfigInput Configuration for execution modes and features.
+type ExecutionModeConfigInput struct {
+	// CleanupConfig Configuration for AVD cleanup between test runs.
+	//
+	// Controls what gets reset when resetting device state between tests
+	// while keeping the emulator running.
+	CleanupConfig *DeviceCleanupConfig `json:"cleanup_config,omitempty"`
+
+	// EnablePlanning Enable planning for complex steps
+	EnablePlanning *bool `json:"enable_planning,omitempty"`
+
+	// EnableReflection Enable reflection on failed steps
+	EnableReflection *bool `json:"enable_reflection,omitempty"`
+
+	// GrounderType Unified grounder configuration that determines both approach and model.
+	//
+	// - UNIFIED: Use instruction LLM for both instruction and grounding (returns coordinates)
+	// - MOONDREAM3/UI_TARS/QWEN3_VL: Two-step with specific grounder model
+	// - AUTO: Use GROUNDER_TYPE env var to determine grounder
+	// - NULL: Skip grounding (for testing/debugging)
+	GrounderType *GrounderType `json:"grounder_type,omitempty"`
+
+	// HumanInTheLoop Enable human approval for test results
+	HumanInTheLoop *bool `json:"human_in_the_loop,omitempty"`
+
+	// InitialLocation GPS location configuration for simulator/emulator.
+	InitialLocation *LocationConfig `json:"initial_location,omitempty"`
+
+	// InitialOrientation Initial device orientation: 'portrait' or 'landscape'
+	InitialOrientation *string `json:"initial_orientation"`
+
+	// ReflectionRetries Number of reflection retry attempts
+	ReflectionRetries *int `json:"reflection_retries,omitempty"`
+
+	// Retries Number of retry attempts
+	Retries *int `json:"retries,omitempty"`
+
+	// SkipAppInstall Skip app installation during test execution
+	SkipAppInstall *bool `json:"skip_app_install,omitempty"`
+}
+
+// ExecutionModeConfigOutput Configuration for execution modes and features.
+type ExecutionModeConfigOutput struct {
 	// CleanupConfig Configuration for AVD cleanup between test runs.
 	//
 	// Controls what gets reset when resetting device state between tests
@@ -4266,6 +4321,7 @@ type ModuleBlock struct {
 	ThenChildren    *[]ModuleBlock `json:"thenChildren"`
 	Type            string         `json:"type"`
 	VariableName    *string        `json:"variable_name"`
+	VariableScope   *string        `json:"variable_scope"`
 }
 
 // ModuleResponse Response model for a single module
@@ -4608,13 +4664,13 @@ type OrgHeadline struct {
 
 // OrgInstallation defines model for OrgInstallation.
 type OrgInstallation struct {
-	CreatedAt             string  `json:"created_at"`
-	GhInstallationOwnerId *string `json:"gh_installation_owner_id"`
-	Id                    string  `json:"id"`
-	InstallationId        int     `json:"installation_id"`
-	PropelOrgId           string  `json:"propel_org_id"`
-	Status                string  `json:"status"`
-	VerifiedAt            *string `json:"verified_at"`
+	CreatedAt             time.Time          `json:"created_at"`
+	GhInstallationOwnerId *string            `json:"gh_installation_owner_id"`
+	Id                    openapi_types.UUID `json:"id"`
+	InstallationId        int                `json:"installation_id"`
+	PropelOrgId           string             `json:"propel_org_id"`
+	Status                string             `json:"status"`
+	VerifiedAt            *time.Time         `json:"verified_at"`
 }
 
 // OrgInvestment defines model for OrgInvestment.
@@ -5298,7 +5354,7 @@ type ReleaseSandboxResponse struct {
 // ReliabilityEstimate Estimate of how reliably this test would pass on re-run.
 type ReliabilityEstimate string
 
-// RemoteBuildRequest Request body to trigger a remote iOS build.
+// RemoteBuildRequest Request body to trigger a remote build.
 //
 // Attributes:
 //
@@ -5308,20 +5364,52 @@ type ReliabilityEstimate string
 //	build_scheme: Optional Xcode scheme override.
 //	setup_command: Optional pre-build setup command
 //	    (e.g. ``npm install && cd ios && pod install``).
-//	clean_build: If true, wipe DerivedData before building.
+//	clean_build: If true, wipe per-job build cache before building.
 //	version: Desired version string. Auto-generated
 //	    when omitted.
 //	set_as_current: Set new build as app's current.
-//	platform: Target platform (``ios`` only in v0).
+//	platform: Target platform (``ios`` or ``android``).
+//	artifact_path: Optional output artifact path or glob.
+//	artifact_type: Optional expected artifact type (``app`` or ``apk``).
 type RemoteBuildRequest struct {
-	AppId        string  `json:"app_id"`
+	AppId string `json:"app_id"`
+
+	// ArtifactPath Expected output artifact path or glob relative to source root.
+	ArtifactPath *string `json:"artifact_path"`
+
+	// ArtifactType Expected artifact type: app for iOS or apk for Android.
+	ArtifactType *string `json:"artifact_type"`
 	BuildCommand string  `json:"build_command"`
 	BuildScheme  *string `json:"build_scheme"`
 	CleanBuild   *bool   `json:"clean_build,omitempty"`
-	Platform     *string `json:"platform,omitempty"`
+
+	// KeepDerivedData Preserve remote iOS DerivedData between builds.
+	KeepDerivedData *bool   `json:"keep_derived_data,omitempty"`
+	Platform        *string `json:"platform,omitempty"`
+
+	// RunnerId Optional build runner pool label to target. This maps to the runner DEVICE_ID label and may represent a runner pool, not a single VM.
+	RunnerId     *string `json:"runner_id"`
 	SetAsCurrent *bool   `json:"set_as_current,omitempty"`
 	SetupCommand *string `json:"setup_command"`
-	SourceKey    string  `json:"source_key"`
+	SourceKey    *string `json:"source_key"`
+
+	// SourceLfs Whether the runner should fetch Git LFS objects.
+	SourceLfs *bool `json:"source_lfs,omitempty"`
+
+	// SourcePatchKey Optional S3 key for a git patch applied after repo checkout.
+	SourcePatchKey *string `json:"source_patch_key"`
+
+	// SourceRef Git branch, tag, or commit SHA for repo-backed builds.
+	SourceRef *string `json:"source_ref"`
+
+	// SourceRepoUrl Git repository URL for repo-backed builds.
+	SourceRepoUrl *string `json:"source_repo_url"`
+
+	// SourceSubdir Optional subdirectory inside the repo-backed checkout.
+	SourceSubdir *string `json:"source_subdir"`
+
+	// SourceType Source provider for repo-backed builds. Currently git.
+	SourceType *string `json:"source_type"`
 
 	// Version Version string. Auto-generated when omitted.
 	Version *string `json:"version"`
@@ -5372,16 +5460,34 @@ type RemoteBuildSourceUploadResponse struct {
 //	version: Version string of the created build.
 //	logs_tail: Last N log lines from the build process.
 //	error: Error message when the build has failed.
+//	phase: Detailed failure/status phase when available.
+//	suggested_fix: Suggested next action when available.
+//	candidate_artifacts: Candidate output artifacts when discovery failed.
+//	artifact_type: Artifact type created by the build.
+//	package_id: Bundle/package identifier extracted from the artifact.
+//	app_id: UUID of the app built.
+//	platform: Build platform.
 //	started_at: ISO timestamp when the build started executing.
 //	completed_at: ISO timestamp when the build finished.
+//	duration_ms: Build duration in milliseconds when known.
+//	runner_id: Build runner label/name that executed the job.
 type RemoteBuildStatusResponse struct {
-	CompletedAt *string `json:"completed_at"`
-	Error       *string `json:"error"`
-	LogsTail    *string `json:"logs_tail"`
-	StartedAt   *string `json:"started_at"`
-	Status      string  `json:"status"`
-	Version     *string `json:"version"`
-	VersionId   *string `json:"version_id"`
+	AppId              *string   `json:"app_id"`
+	ArtifactType       *string   `json:"artifact_type"`
+	CandidateArtifacts *[]string `json:"candidate_artifacts"`
+	CompletedAt        *string   `json:"completed_at"`
+	DurationMs         *int      `json:"duration_ms"`
+	Error              *string   `json:"error"`
+	LogsTail           *string   `json:"logs_tail"`
+	PackageId          *string   `json:"package_id"`
+	Phase              *string   `json:"phase"`
+	Platform           *string   `json:"platform"`
+	RunnerId           *string   `json:"runner_id"`
+	StartedAt          *string   `json:"started_at"`
+	Status             string    `json:"status"`
+	SuggestedFix       *string   `json:"suggested_fix"`
+	Version            *string   `json:"version"`
+	VersionId          *string   `json:"version_id"`
 }
 
 // RemoteBuildTriggerResponse Response returned immediately after a build is enqueued.
@@ -5609,6 +5715,9 @@ type ResolvedBuild struct {
 
 // ResolvedVariable A variable resolved from either local or global scope.
 type ResolvedVariable struct {
+	// IsSecret True for org-level secret globals. Callers must keep the value off any client-facing surface (instruction text, reports, logs).
+	IsSecret *bool `json:"is_secret,omitempty"`
+
 	// Source Source: 'local' or 'global'
 	Source string `json:"source"`
 
@@ -5703,7 +5812,7 @@ type RunningTestMetadataContent struct {
 	Platform string `json:"platform"`
 
 	// RunConfig Complete configuration for a test run.
-	RunConfig *TestRunConfig `json:"run_config,omitempty"`
+	RunConfig *TestRunConfigOutput `json:"run_config,omitempty"`
 
 	// RunId OpenTelemetry trace ID for correlation
 	RunId *openapi_types.UUID `json:"run_id"`
@@ -6111,12 +6220,15 @@ type StartDeviceInfo struct {
 	BackendUrl *string             `json:"backend_url"`
 
 	// BuildId Specific `builds` table row UUID. When provided, the backend uses this exact build instead of resolving the latest build for the given `app_id`.
-	BuildId            *openapi_types.UUID `json:"build_id"`
-	DeviceLocal        *bool               `json:"device_local"`
-	DeviceModel        *string             `json:"device_model"`
-	EnvVars            *map[string]string  `json:"env_vars"`
-	IdleTimeoutSeconds *int                `json:"idle_timeout_seconds"`
-	IsSimulation       *bool               `json:"is_simulation,omitempty"`
+	BuildId     *openapi_types.UUID `json:"build_id"`
+	DeviceLocal *bool               `json:"device_local"`
+	DeviceModel *string             `json:"device_model"`
+
+	// DeviceRunnerId Optional worker DEVICE_ID label to require for direct device sessions.
+	DeviceRunnerId     *string            `json:"device_runner_id"`
+	EnvVars            *map[string]string `json:"env_vars"`
+	IdleTimeoutSeconds *int               `json:"idle_timeout_seconds"`
+	IsSimulation       *bool              `json:"is_simulation,omitempty"`
 
 	// LaunchEnvVarIds Org launch variable IDs selected for a raw device session. Only valid when `test_id` is absent.
 	LaunchEnvVarIds *[]openapi_types.UUID `json:"launch_env_var_ids"`
@@ -6125,7 +6237,7 @@ type StartDeviceInfo struct {
 	Platform        *string               `json:"platform,omitempty"`
 
 	// RunConfig Complete configuration for a test run.
-	RunConfig                    *TestRunConfig      `json:"run_config,omitempty"`
+	RunConfig                    *TestRunConfigInput `json:"run_config,omitempty"`
 	SessionId                    *openapi_types.UUID `json:"session_id"`
 	StartupSessionStartMonotonic *float32            `json:"startup_session_start_monotonic"`
 	TestId                       *openapi_types.UUID `json:"test_id"`
@@ -6448,7 +6560,7 @@ type TaskID struct {
 	Retries   *int    `json:"retries"`
 
 	// RunConfig Complete configuration for a test run.
-	RunConfig *TestRunConfig `json:"run_config,omitempty"`
+	RunConfig *TestRunConfigInput `json:"run_config,omitempty"`
 
 	// Source Execution source: ui, cli, api, ci_cd, or workflow. Defaults to 'api' for direct API calls.
 	Source         *string            `json:"source"`
@@ -6459,8 +6571,8 @@ type TaskID struct {
 	VariableOverrides *map[string]string `json:"variable_overrides"`
 }
 
-// TaskMetadata defines model for TaskMetadata.
-type TaskMetadata struct {
+// TaskMetadataInput defines model for TaskMetadata-Input.
+type TaskMetadataInput struct {
 	// AgentDescription Human-readable instruction describing what the agent did, e.g. 'Click the Sign In button'
 	AgentDescription *string      `json:"agent_description"`
 	Download         *bool        `json:"download"`
@@ -6471,7 +6583,26 @@ type TaskMetadata struct {
 	Step *string `json:"step"`
 
 	// StepConfig Complete configuration for a test run.
-	StepConfig *TestRunConfig `json:"step_config,omitempty"`
+	StepConfig *TestRunConfigInput `json:"step_config,omitempty"`
+
+	// StepDescription Human-readable description of the step
+	StepDescription *string `json:"step_description"`
+	StepType        string  `json:"step_type"`
+}
+
+// TaskMetadataOutput defines model for TaskMetadata-Output.
+type TaskMetadataOutput struct {
+	// AgentDescription Human-readable instruction describing what the agent did, e.g. 'Click the Sign In button'
+	AgentDescription *string      `json:"agent_description"`
+	Download         *bool        `json:"download"`
+	Id               *string      `json:"id"`
+	Metadata         *DOMMetadata `json:"metadata,omitempty"`
+
+	// Step Deprecated: Use step_description instead
+	Step *string `json:"step"`
+
+	// StepConfig Complete configuration for a test run.
+	StepConfig *TestRunConfigOutput `json:"step_config,omitempty"`
 
 	// StepDescription Human-readable description of the step
 	StepDescription *string `json:"step_description"`
@@ -6535,8 +6666,8 @@ type TestInput struct {
 	// Attributes:
 	//     test_id (str): The unique identifier for the test.
 	//     cached_elements (Dict[str, CachedActionElement]): Dictionary of cached action elements keyed by node_id.
-	CachedElements *CachedActionStore `json:"cached_elements,omitempty"`
-	DeviceLocal    *bool              `json:"device_local"`
+	CachedElements *CachedActionStoreInput `json:"cached_elements,omitempty"`
+	DeviceLocal    *bool                   `json:"device_local"`
 
 	// ExpectedVersion Expected version for optimistic locking. If provided and doesn't match current version, update will fail with 409 Conflict.
 	ExpectedVersion *int                `json:"expected_version"`
@@ -6577,7 +6708,7 @@ type TestInput struct {
 	Retries       *int           `json:"retries"`
 
 	// RunConfig Complete configuration for a test run.
-	RunConfig *TestRunConfig      `json:"run_config,omitempty"`
+	RunConfig *TestRunConfigInput `json:"run_config,omitempty"`
 	RunId     *openapi_types.UUID `json:"run_id"`
 
 	// Tags Tags associated with this test for categorization and filtering
@@ -6603,7 +6734,7 @@ type TestInput_Tasks_0_Item struct {
 type TestInputTasks1 = []map[string]interface{}
 
 // TestInputTasks2 defines model for .
-type TestInputTasks2 = []TaskMetadata
+type TestInputTasks2 = []TaskMetadataInput
 
 // TestInput_Tasks defines model for TestInput.Tasks.
 type TestInput_Tasks struct {
@@ -6622,8 +6753,8 @@ type TestOutput struct {
 	// Attributes:
 	//     test_id (str): The unique identifier for the test.
 	//     cached_elements (Dict[str, CachedActionElement]): Dictionary of cached action elements keyed by node_id.
-	CachedElements *CachedActionStore `json:"cached_elements,omitempty"`
-	DeviceLocal    *bool              `json:"device_local"`
+	CachedElements *CachedActionStoreOutput `json:"cached_elements,omitempty"`
+	DeviceLocal    *bool                    `json:"device_local"`
 
 	// ExpectedVersion Expected version for optimistic locking. If provided and doesn't match current version, update will fail with 409 Conflict.
 	ExpectedVersion *int                `json:"expected_version"`
@@ -6664,8 +6795,8 @@ type TestOutput struct {
 	Retries       *int           `json:"retries"`
 
 	// RunConfig Complete configuration for a test run.
-	RunConfig *TestRunConfig      `json:"run_config,omitempty"`
-	RunId     *openapi_types.UUID `json:"run_id"`
+	RunConfig *TestRunConfigOutput `json:"run_config,omitempty"`
+	RunId     *openapi_types.UUID  `json:"run_id"`
 
 	// Tags Tags associated with this test for categorization and filtering
 	Tags   *[]Tag              `json:"tags"`
@@ -6690,7 +6821,7 @@ type TestOutput_Tasks_0_Item struct {
 type TestOutputTasks1 = []map[string]interface{}
 
 // TestOutputTasks2 defines model for .
-type TestOutputTasks2 = []TaskMetadata
+type TestOutputTasks2 = []TaskMetadataOutput
 
 // TestOutput_Tasks defines model for TestOutput.Tasks.
 type TestOutput_Tasks struct {
@@ -6790,6 +6921,7 @@ type TestExecutionCreate struct {
 	OrgId               openapi_types.UUID      `json:"org_id"`
 	Progress            *float32                `json:"progress"`
 	ResolvedBuildId     *string                 `json:"resolved_build_id"`
+	RunConfig           *map[string]interface{} `json:"run_config"`
 	SessionId           string                  `json:"session_id"`
 	TestId              *string                 `json:"test_id"`
 	WasQuarantined      *bool                   `json:"was_quarantined,omitempty"`
@@ -7083,8 +7215,8 @@ type TestRestoreVersionResponse struct {
 	RestoredFrom int `json:"restored_from"`
 }
 
-// TestRunConfig Complete configuration for a test run.
-type TestRunConfig struct {
+// TestRunConfigInput Complete configuration for a test run.
+type TestRunConfigInput struct {
 	// CacheRetryMode Cache retry policy for test execution.
 	//
 	// - NONE: No cache fallback, fail if cached steps fail
@@ -7095,7 +7227,37 @@ type TestRunConfig struct {
 	DisableGrid *bool `json:"disable_grid"`
 
 	// ExecutionMode Configuration for execution modes and features.
-	ExecutionMode *ExecutionModeConfig `json:"execution_mode,omitempty"`
+	ExecutionMode *ExecutionModeConfigInput `json:"execution_mode,omitempty"`
+
+	// FailFast When true, the test halts immediately on the first failed validation or non-zero script exit code instead of continuing through remaining steps.
+	FailFast *bool `json:"fail_fast,omitempty"`
+
+	// FallbackTrigger When to trigger cache fallback.
+	//
+	// - FINAL_FAIL: Only trigger fallback if overall test fails
+	FallbackTrigger *FallbackTrigger `json:"fallback_trigger,omitempty"`
+
+	// LlmConfig Configuration for LLM models used in different stages.
+	LlmConfig *LLMConfig          `json:"llm_config,omitempty"`
+	RunId     *openapi_types.UUID `json:"run_id"`
+}
+
+// TestRunConfigOutput Complete configuration for a test run.
+type TestRunConfigOutput struct {
+	// CacheRetryMode Cache retry policy for test execution.
+	//
+	// - NONE: No cache fallback, fail if cached steps fail
+	// - FULL_RERUN: If cached run fails, rerun entire test without cache
+	CacheRetryMode *CacheRetryMode `json:"cache_retry_mode,omitempty"`
+
+	// DisableGrid Admin-only: Disable grid preprocessing for grounding
+	DisableGrid *bool `json:"disable_grid"`
+
+	// ExecutionMode Configuration for execution modes and features.
+	ExecutionMode *ExecutionModeConfigOutput `json:"execution_mode,omitempty"`
+
+	// FailFast When true, the test halts immediately on the first failed validation or non-zero script exit code instead of continuing through remaining steps.
+	FailFast *bool `json:"fail_fast,omitempty"`
 
 	// FallbackTrigger When to trigger cache fallback.
 	//
@@ -8083,10 +8245,10 @@ type WorkflowDetailData struct {
 	QuarantinedTestIds *[]string `json:"quarantined_test_ids,omitempty"`
 
 	// RunConfig Complete configuration for a test run.
-	RunConfig        *TestRunConfig `json:"run_config,omitempty"`
-	Schedule         string         `json:"schedule"`
-	ScheduleEnabled  *bool          `json:"schedule_enabled"`
-	ScheduleTimezone *string        `json:"schedule_timezone"`
+	RunConfig        *TestRunConfigOutput `json:"run_config,omitempty"`
+	Schedule         string               `json:"schedule"`
+	ScheduleEnabled  *bool                `json:"schedule_enabled"`
+	ScheduleTimezone *string              `json:"schedule_timezone"`
 
 	// TestCount Number of tests in workflow
 	TestCount int `json:"test_count"`
@@ -8308,8 +8470,8 @@ type WorkflowInfoInput struct {
 	OverrideBuildConfig *bool `json:"override_build_config,omitempty"`
 
 	// RunConfig Complete configuration for a test run.
-	RunConfig  *TestRunConfig     `json:"run_config,omitempty"`
-	WorkflowId openapi_types.UUID `json:"workflow_id"`
+	RunConfig  *TestRunConfigInput `json:"run_config,omitempty"`
+	WorkflowId openapi_types.UUID  `json:"workflow_id"`
 }
 
 // WorkflowInfoOutput Basic workflow info for rule display.
@@ -8489,10 +8651,10 @@ type WorkflowWithLastStatus struct {
 	QuarantinedTestIds *[]string `json:"quarantined_test_ids,omitempty"`
 
 	// RunConfig Complete configuration for a test run.
-	RunConfig        *TestRunConfig `json:"run_config,omitempty"`
-	Schedule         string         `json:"schedule"`
-	ScheduleEnabled  *bool          `json:"schedule_enabled"`
-	ScheduleTimezone *string        `json:"schedule_timezone"`
+	RunConfig        *TestRunConfigOutput `json:"run_config,omitempty"`
+	Schedule         string               `json:"schedule"`
+	ScheduleEnabled  *bool                `json:"schedule_enabled"`
+	ScheduleTimezone *string              `json:"schedule_timezone"`
 
 	// TestCount Number of tests in this workflow
 	TestCount int `json:"test_count"`
@@ -8529,10 +8691,10 @@ type WorkflowsBaseSchema struct {
 	QuarantinedTestIds *[]string `json:"quarantined_test_ids,omitempty"`
 
 	// RunConfig Complete configuration for a test run.
-	RunConfig        *TestRunConfig `json:"run_config,omitempty"`
-	Schedule         string         `json:"schedule"`
-	ScheduleEnabled  *bool          `json:"schedule_enabled"`
-	ScheduleTimezone *string        `json:"schedule_timezone"`
+	RunConfig        *TestRunConfigOutput `json:"run_config,omitempty"`
+	Schedule         string               `json:"schedule"`
+	ScheduleEnabled  *bool                `json:"schedule_enabled"`
+	ScheduleTimezone *string              `json:"schedule_timezone"`
 
 	// TestTimeoutSeconds Per-test execution timeout in seconds. Applied to all tests dispatched by this workflow.
 	TestTimeoutSeconds *int       `json:"test_timeout_seconds"`
@@ -8982,6 +9144,14 @@ type GetBuildRunsApiV1AppsBuildsVersionIdRunsGetParams struct {
 
 	// PageSize Number of items per page (max 100)
 	PageSize *int `form:"page_size,omitempty" json:"page_size,omitempty"`
+}
+
+// CheckBuildRunnersAvailableApiV1AppsRemoteRunnersAvailableGetParams defines parameters for CheckBuildRunnersAvailableApiV1AppsRemoteRunnersAvailableGet.
+type CheckBuildRunnersAvailableApiV1AppsRemoteRunnersAvailableGetParams struct {
+	Platform *string `form:"platform,omitempty" json:"platform,omitempty"`
+
+	// RunnerId Optional build runner pool label to require. This targets the runner's DEVICE_ID label, not an individual VM.
+	RunnerId *string `form:"runner_id,omitempty" json:"runner_id,omitempty"`
 }
 
 // ResolveBuildApiV1AppsResolvePostParams defines parameters for ResolveBuildApiV1AppsResolvePost.
@@ -9893,7 +10063,7 @@ type CreateTestFromYamlApiV1TestsYamlFromYamlPostJSONRequestBody = YamlCreationR
 type ValidateYamlApiV1TestsYamlValidateYamlPostJSONRequestBody = ValidationRequest
 
 // UpdateCachedElementsEndpointApiV1TestsTestIdCachedElementsPutJSONRequestBody defines body for UpdateCachedElementsEndpointApiV1TestsTestIdCachedElementsPut for application/json ContentType.
-type UpdateCachedElementsEndpointApiV1TestsTestIdCachedElementsPutJSONRequestBody = CachedActionStore
+type UpdateCachedElementsEndpointApiV1TestsTestIdCachedElementsPutJSONRequestBody = CachedActionStoreInput
 
 // UpdateDeviceTargetApiV1TestsTestIdDeviceTargetPatchJSONRequestBody defines body for UpdateDeviceTargetApiV1TestsTestIdDeviceTargetPatch for application/json ContentType.
 type UpdateDeviceTargetApiV1TestsTestIdDeviceTargetPatchJSONRequestBody = UpdateDeviceTargetRequest

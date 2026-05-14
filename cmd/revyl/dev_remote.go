@@ -29,12 +29,8 @@ type remoteDevBuildResult struct {
 }
 
 func validateRemoteDevStartFlags() error {
-	requestedPlatform, err := normalizeMobilePlatform(devStartPlatform, "ios")
-	if err != nil {
+	if _, err := normalizeMobilePlatform(devStartPlatform, "ios"); err != nil {
 		return err
-	}
-	if requestedPlatform != "ios" {
-		return fmt.Errorf("revyl dev --remote currently supports iOS only")
 	}
 	if devStartNoBuild {
 		return fmt.Errorf("use either --remote or --no-build, not both")
@@ -48,8 +44,8 @@ func validateRemoteDevStartFlags() error {
 	return nil
 }
 
-// runDevRemoteRebuildOnly starts a native iOS dev loop where all builds run on
-// Revyl's remote iOS build runner and the active device session only handles
+// runDevRemoteRebuildOnly starts a native dev loop where all builds run on
+// Revyl's remote build runner and the active device session only handles
 // install, launch, streaming, and interaction.
 func runDevRemoteRebuildOnly(cmd *cobra.Command, cfg *config.ProjectConfig, configPath, cwd, apiKey, ctxName string) error {
 	if err := validateRemoteDevStartFlags(); err != nil {
@@ -69,15 +65,11 @@ func runDevRemoteRebuildOnly(cmd *cobra.Command, cfg *config.ProjectConfig, conf
 	if err != nil {
 		return err
 	}
-	if devicePlatform != "ios" {
-		return fmt.Errorf("revyl dev --remote currently supports iOS only")
-	}
-
 	platCfg := cfg.Build.Platforms[platformKey]
 	if strings.TrimSpace(platCfg.Command) == "" {
 		return fmt.Errorf("build.platforms.%s.command is required for revyl dev --remote", platformKey)
 	}
-	if !strings.Contains(strings.ToLower(platCfg.Command), "xcodebuild") {
+	if devicePlatform == "ios" && !strings.Contains(strings.ToLower(platCfg.Command), "xcodebuild") {
 		return fmt.Errorf("revyl dev --remote v1 supports native iOS xcodebuild projects only")
 	}
 
@@ -108,7 +100,7 @@ func runDevRemoteRebuildOnly(cmd *cobra.Command, cfg *config.ProjectConfig, conf
 	ui.PrintBanner(version)
 	ui.Println()
 	ui.PrintInfo("Remote dev loop (%s / %s)", cfg.Build.System, platformKey)
-	ui.PrintDim("Builds run on a Revyl Mac runner; this session keeps the simulator alive.")
+	ui.PrintDim("Builds run on a Revyl build runner; this session keeps the device session alive.")
 	ui.Println()
 
 	if strings.TrimSpace(platCfg.AppID) == "" {
@@ -138,7 +130,7 @@ func runDevRemoteRebuildOnly(cmd *cobra.Command, cfg *config.ProjectConfig, conf
 	stopSigHandler := startDevLoopSignalHandler(sigChan, stopper)
 	defer stopSigHandler()
 
-	remoteBuild, err := runRemoteDevBuild(ctx, client, platCfg, platformKey, appID, cwd)
+	remoteBuild, err := runRemoteDevBuild(ctx, client, platCfg, platformKey, devicePlatform, appID, cwd)
 	if err != nil {
 		if stopper.IsUserCanceled(err) {
 			return nil
@@ -220,17 +212,6 @@ func runDevRemoteRebuildOnly(cmd *cobra.Command, cfg *config.ProjectConfig, conf
 	deviceMgr.StopIdleTimer(session.Index)
 	viewerURL := devSessionViewerURL(session, devMode)
 
-	ui.Println()
-	ui.PrintSuccess("Remote dev loop ready")
-	ui.PrintLink("Viewer", viewerURL)
-	ui.PrintInfo("Installed remote build: %s", strings.TrimSpace(buildDetail.Version))
-	if identifier := formatInstalledAppIdentifier(devicePlatform, bundleID); identifier != "" {
-		ui.PrintInfo("Installed app: %s", identifier)
-	}
-	ui.Println()
-	printNewTerminalHints(ctxName, session.Index)
-	ui.Println()
-
 	pidPath := devCtxPIDPath(cwd, ctxName)
 	if err := os.MkdirAll(filepath.Dir(pidPath), 0755); err != nil {
 		return fmt.Errorf("failed to create dev context directory: %w", err)
@@ -280,6 +261,27 @@ func runDevRemoteRebuildOnly(cmd *cobra.Command, cfg *config.ProjectConfig, conf
 	}
 	writeDevStatus(statusPath, session, viewerURL, "", "", "", devicePlatform, 0, false, initialResult)
 
+	cockpitRebuilds := make(chan struct{}, 1)
+	cockpit, cockpitErr := startDevCockpitForContext(ctx, cwd, ctxName, viewerURL, true, cockpitRebuilds, stopper.RequestStop)
+	cockpitURL := ""
+	if cockpitErr != nil {
+		ui.PrintWarning("Local cockpit unavailable: %v", cockpitErr)
+	} else {
+		cockpitURL = cockpit.URL
+		defer cockpit.Close(context.Background())
+	}
+
+	ui.Println()
+	ui.PrintSuccess("Remote dev loop ready")
+	printDevBrowserLinks(cockpitURL, viewerURL)
+	ui.PrintInfo("Installed remote build: %s", strings.TrimSpace(buildDetail.Version))
+	if identifier := formatInstalledAppIdentifier(devicePlatform, bundleID); identifier != "" {
+		ui.PrintInfo("Installed app: %s", identifier)
+	}
+	ui.Println()
+	printNewTerminalHints(ctxName, session.Index)
+	ui.Println()
+
 	sigusr1 := make(chan os.Signal, 1)
 	if sigutil.RebuildSignal != nil {
 		signal.Notify(sigusr1, sigutil.RebuildSignal)
@@ -287,7 +289,7 @@ func runDevRemoteRebuildOnly(cmd *cobra.Command, cfg *config.ProjectConfig, conf
 	defer signal.Stop(sigusr1)
 
 	if openBrowser {
-		_ = ui.OpenBrowser(viewerURL)
+		_ = ui.OpenBrowser(devBrowserOpenTarget(cockpitURL, viewerURL))
 	}
 
 	stdinKeys, restoreTerminal, keybindsEnabled := readStdinKeys(ctx, stopper.RequestStop)
@@ -316,6 +318,8 @@ func runDevRemoteRebuildOnly(cmd *cobra.Command, cfg *config.ProjectConfig, conf
 			}
 		case <-sigusr1:
 			doRebuild = true
+		case <-cockpitRebuilds:
+			doRebuild = true
 		case key := <-stdinKeys:
 			switch key {
 			case 'r':
@@ -341,7 +345,7 @@ func runDevRemoteRebuildOnly(cmd *cobra.Command, cfg *config.ProjectConfig, conf
 		rebuildCount++
 		rebuildStart := time.Now()
 		result := devRebuildResult{buildMode: "remote"}
-		remoteBuild, buildErr := runRemoteDevBuild(ctx, client, platCfg, platformKey, appID, cwd)
+		remoteBuild, buildErr := runRemoteDevBuild(ctx, client, platCfg, platformKey, devicePlatform, appID, cwd)
 		if buildErr != nil {
 			if stopper.IsUserCanceled(buildErr) {
 				return nil
@@ -413,6 +417,7 @@ func runRemoteDevBuild(
 	client *api.Client,
 	platCfg config.BuildPlatform,
 	platformKey string,
+	devicePlatform string,
 	appID string,
 	cwd string,
 ) (remoteDevBuildResult, error) {
@@ -457,23 +462,26 @@ func runRemoteDevBuild(
 	}
 
 	setCurrent := true
-	platform := "ios"
+	platform := devicePlatform
+	artifactType := defaultRemoteArtifactType(platform)
 	versionStr := build.GenerateVersionStringForWorkDir(cwd)
 	triggerResp, err := client.TriggerRemoteBuild(ctx, &api.RemoteBuildRequest{
 		AppId:        appID,
-		SourceKey:    uploadResp.SourceKey,
+		SourceKey:    stringPtrOrNil(uploadResp.SourceKey),
 		BuildCommand: buildCommand,
 		BuildScheme:  stringPtrOrNil(scheme),
 		SetupCommand: stringPtrOrNil(platCfg.Setup),
 		Version:      stringPtrOrNil(versionStr),
 		SetAsCurrent: &setCurrent,
 		Platform:     &platform,
+		ArtifactPath: stringPtrOrNil(platCfg.Output),
+		ArtifactType: stringPtrOrNil(artifactType),
 	})
 	if err != nil {
 		return remoteDevBuildResult{}, fmt.Errorf("failed to trigger remote build: %w", err)
 	}
 
-	status, err := pollRemoteBuildStatusResult(ctx, client, triggerResp.BuildJobId)
+	status, err := pollRemoteBuildStatusResultWithTimeout(ctx, client, triggerResp.BuildJobId, remoteBuildTimeoutFromConfig(cwd))
 	if err != nil {
 		return remoteDevBuildResult{jobID: triggerResp.BuildJobId, duration: time.Since(start)}, err
 	}
@@ -494,13 +502,19 @@ func runRemoteDevBuild(
 }
 
 func pollRemoteBuildStatusResult(ctx context.Context, client *api.Client, jobID string) (*api.RemoteBuildStatusResponse, error) {
+	return pollRemoteBuildStatusResultWithTimeout(ctx, client, jobID, remoteBuildDefaultTimeout)
+}
+
+func pollRemoteBuildStatusResultWithTimeout(ctx context.Context, client *api.Client, jobID string, timeout time.Duration) (*api.RemoteBuildStatusResponse, error) {
+	if timeout <= 0 {
+		timeout = remoteBuildDefaultTimeout
+	}
 	ticker := time.NewTicker(remoteBuildPollInterval)
 	defer ticker.Stop()
 
 	lastStatus := ""
 	lastLogLines := 0
 	startTime := time.Now()
-	timeout := 30 * time.Minute
 
 	for {
 		select {

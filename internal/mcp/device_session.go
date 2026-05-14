@@ -290,6 +290,12 @@ type StartSessionOptions struct {
 	// Optional test/session metadata.
 	TestID string
 
+	// SkipAppInstall asks the backend boot path to attach a clean device without
+	// installing the app. Callers that need deterministic dev-client install
+	// behavior can then install through the worker HTTP API after the session is
+	// connected.
+	SkipAppInstall bool
+
 	// Optional idle timeout (defaults to 5 minutes).
 	IdleTimeout time.Duration
 
@@ -297,6 +303,8 @@ type StartSessionOptions struct {
 	DeviceModel string
 	// OsVersion overrides the target OS runtime (e.g. "iOS 18.5").
 	OsVersion string
+	// DeviceRunnerID pins the session to a specific worker DEVICE_ID label.
+	DeviceRunnerID string
 }
 
 // StartSession provisions a new cloud device and adds it to the session map.
@@ -365,11 +373,21 @@ func (m *DeviceSessionManager) StartSession(
 	if len(resolvedLaunchVarIDs) > 0 {
 		req.LaunchEnvVarIds = resolvedLaunchVarIDs
 	}
+	if opts.SkipAppInstall {
+		req.RunConfig = &api.DeviceRunConfig{
+			ExecutionMode: &api.DeviceExecutionModeConfig{
+				SkipAppInstall: true,
+			},
+		}
+	}
 	if opts.DeviceModel != "" {
 		req.DeviceModel = opts.DeviceModel
 	}
 	if opts.OsVersion != "" {
 		req.OsVersion = opts.OsVersion
+	}
+	if opts.DeviceRunnerID != "" {
+		req.DeviceRunnerID = strings.TrimSpace(opts.DeviceRunnerID)
 	}
 
 	// Start the device via backend API
@@ -870,9 +888,23 @@ func (m *DeviceSessionManager) waitForWorkerURL(ctx context.Context, workflowRun
 
 	for time.Now().Before(deadline) {
 		resp, err := m.apiClient.GetWorkerWSURL(ctx, workflowRunID)
-		if err == nil && resp.WorkerWsUrl != nil && *resp.WorkerWsUrl != "" {
-			// Convert WS URL to HTTP base URL
-			return wsURLToHTTP(*resp.WorkerWsUrl), nil
+		if err == nil {
+			if resp.WorkerWsUrl != nil && *resp.WorkerWsUrl != "" {
+				// Convert WS URL to HTTP base URL
+				return wsURLToHTTP(*resp.WorkerWsUrl), nil
+			}
+			status := strings.ToLower(strings.TrimSpace(string(resp.Status)))
+			switch status {
+			case "cancelled", "stopped", "failed":
+				message := ""
+				if resp.Message != nil {
+					message = strings.TrimSpace(*resp.Message)
+				}
+				if message == "" {
+					message = fmt.Sprintf("worker connection status is %s", status)
+				}
+				return "", fmt.Errorf("%s", message)
+			}
 		}
 
 		select {
@@ -1024,8 +1056,10 @@ func (m *DeviceSessionManager) checkSessionStatusOnFailure(session *DeviceSessio
 		return "" // can't reach backend either
 	}
 	switch resp.Status {
-	case api.WorkerConnectionResponseStatusStopped, api.WorkerConnectionResponseStatusCancelled:
-		return "session was stopped externally (from browser or another client)"
+	case api.WorkerConnectionResponseStatusStopped:
+		return workerConnectionStoppedReason(resp)
+	case api.WorkerConnectionResponseStatusCancelled:
+		return "session was cancelled externally (from browser or another client)"
 	case api.WorkerConnectionResponseStatusFailed:
 		return "session failed on the worker"
 	default:
@@ -1054,14 +1088,32 @@ func (m *DeviceSessionManager) CheckSessionAlive(ctx context.Context, session *D
 	}
 	switch resp.Status {
 	case api.WorkerConnectionResponseStatusStopped:
-		return false, "session idle timeout"
+		return false, workerConnectionStoppedReason(resp)
 	case api.WorkerConnectionResponseStatusCancelled:
-		return false, "session was cancelled"
+		return false, "session was cancelled externally (from browser or another client)"
 	case api.WorkerConnectionResponseStatusFailed:
 		return false, "session failed on the worker"
 	default:
 		return true, ""
 	}
+}
+
+func workerConnectionStoppedReason(resp *api.WorkerConnectionResponse) string {
+	if resp == nil {
+		return "session was stopped externally (from browser or another client)"
+	}
+	message := ""
+	if resp.Message != nil {
+		message = strings.TrimSpace(*resp.Message)
+	}
+	normalized := strings.ToLower(message)
+	if strings.Contains(normalized, "idle") || strings.Contains(normalized, "timeout") {
+		return "session idle timeout"
+	}
+	if message != "" {
+		return "session ended externally: " + message
+	}
+	return "session was stopped externally (from browser or another client)"
 }
 
 // workerHealthResponse represents the JSON body returned by the worker /health endpoint.

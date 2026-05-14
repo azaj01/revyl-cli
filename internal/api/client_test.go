@@ -154,6 +154,28 @@ func TestUploadBuild_RetriesRetryableStatusThenSucceeds(t *testing.T) {
 	}
 }
 
+func TestCancelRemoteBuildUsesDeleteEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Fatalf("method = %s, want DELETE", r.Method)
+		}
+		if r.URL.Path != "/api/v1/apps/remote/job-1" {
+			t.Fatalf("path = %s, want /api/v1/apps/remote/job-1", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+			t.Fatalf("authorization header = %q, want Bearer test-key", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"cancelled","build_job_id":"job-1"}`))
+	}))
+	defer server.Close()
+
+	client := NewClientWithBaseURL("test-key", server.URL)
+	if err := client.CancelRemoteBuild(context.Background(), "job-1"); err != nil {
+		t.Fatalf("CancelRemoteBuild() error = %v, want nil", err)
+	}
+}
+
 type failFirstTransport struct {
 	base  http.RoundTripper
 	err   error
@@ -209,6 +231,25 @@ func TestUploadBuild_RetriesTransportErrorThenSucceeds(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(completeCalls); got != 1 {
 		t.Fatalf("complete-upload calls = %d, want 1", got)
+	}
+}
+
+func TestParseAPIErrorBodyIncludesValidationErrors(t *testing.T) {
+	err := parseAPIErrorBody(http.StatusUnprocessableEntity, []byte(`{
+		"message":"Validation error",
+		"errors":[{
+			"field":"body.setup_command",
+			"message":"Value error, setup_command must start with an allowed tool: git, bash",
+			"type":"value_error"
+		}]
+	}`))
+
+	got := err.Error()
+	if !strings.Contains(got, "Validation error") {
+		t.Fatalf("error = %q, want top-level message", got)
+	}
+	if !strings.Contains(got, "body.setup_command: Value error, setup_command must start with an allowed tool: git, bash") {
+		t.Fatalf("error = %q, want field-level validation detail", got)
 	}
 }
 
@@ -797,6 +838,34 @@ func TestProxyWorkerRequest_InferMethodFromAction(t *testing.T) {
 				t.Fatalf("statusCode = %d, want %d", statusCode, tt.wantStatusCode)
 			}
 		})
+	}
+}
+
+func TestProxyWorkerRequest_InstallUsesLongRunningClient(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/api/v1/execution/device-proxy/wf-1/install" {
+			t.Fatalf("unexpected path: %s", got)
+		}
+		time.Sleep(25 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"Success":true}`))
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewClientWithBaseURL("test-key", server.URL)
+	client.httpClient = &http.Client{Timeout: time.Nanosecond}
+	client.uploadClient = &http.Client{Timeout: time.Second}
+
+	_, statusCode, err := client.ProxyWorkerRequest(
+		context.Background(),
+		"wf-1",
+		"install",
+		map[string]string{"app_url": "https://example.test/app.apk"},
+	)
+	if err != nil {
+		t.Fatalf("ProxyWorkerRequest() error = %v, want nil", err)
+	}
+	if statusCode != http.StatusOK {
+		t.Fatalf("statusCode = %d, want %d", statusCode, http.StatusOK)
 	}
 }
 

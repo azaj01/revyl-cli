@@ -170,6 +170,74 @@ func runCancelWorkflow(cmd *cobra.Command, args []string) error {
 	return fmt.Errorf("could not cancel workflow: %s", resp.Message)
 }
 
+// runCancelBuild handles the build cancel command execution.
+//
+// Parameters:
+//   - cmd: The cobra command being executed
+//   - args: Command arguments (remote build job ID)
+//
+// Returns:
+//   - error: Any error that occurred
+func runCancelBuild(cmd *cobra.Command, args []string) error {
+	buildJobID := args[0]
+
+	apiKey, err := getAPIKey()
+	if err != nil {
+		return err
+	}
+
+	devMode, _ := cmd.Flags().GetBool("dev")
+	jsonOutput, _ := cmd.Root().PersistentFlags().GetBool("json")
+	if jsonOutput {
+		ui.SetQuietMode(true)
+		defer ui.SetQuietMode(false)
+	}
+
+	client := api.NewClientWithDevMode(apiKey, devMode)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if !jsonOutput {
+		ui.PrintInfo("Cancelling build %s...", buildJobID)
+	}
+
+	if err := client.CancelRemoteBuild(ctx, buildJobID); err != nil {
+		var apiErr *api.APIError
+		if errors.As(err, &apiErr) {
+			switch apiErr.StatusCode {
+			case 404:
+				ui.PrintError("Remote build not found: %s", buildJobID)
+				return fmt.Errorf("remote build not found")
+			case 403:
+				ui.PrintError("Permission denied")
+				ui.PrintInfo("You can only cancel builds in your organization")
+				return fmt.Errorf("permission denied")
+			case 409:
+				ui.PrintWarning("Remote build is already terminal")
+				return fmt.Errorf("remote build is already terminal")
+			}
+		}
+		ui.PrintError("Failed to cancel build: %v", err)
+		return err
+	}
+
+	if jsonOutput {
+		output, err := json.MarshalIndent(map[string]string{
+			"status":       "cancelled",
+			"build_job_id": buildJobID,
+		}, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal JSON: %w", err)
+		}
+		fmt.Println(string(output))
+		return nil
+	}
+
+	ui.PrintSuccess("Build cancellation requested")
+	return nil
+}
+
 // getAPIKey retrieves the active authentication token from environment, browser auth, or credentials file.
 // Supports both browser-based OAuth tokens (AccessToken) and API key authentication.
 //

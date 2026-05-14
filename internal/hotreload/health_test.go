@@ -34,6 +34,11 @@ func TestIsLocalConnectionRefused(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "windows actively refused",
+			err:  fmt.Errorf("dial tcp 127.0.0.1:8081: connectex: No connection could be made because the target machine actively refused it."),
+			want: true,
+		},
+		{
 			name: "non refused network error",
 			err:  fmt.Errorf("dial tcp 127.0.0.1:8081: i/o timeout"),
 			want: false,

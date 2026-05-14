@@ -28,7 +28,9 @@ var buildCmd = &cobra.Command{
 
 Commands:
   upload  - Build and upload the app
+  remote  - Build on a dedicated Revyl cloud runner
   list    - List uploaded build versions
+  cancel  - Cancel a running remote build
   delete  - Delete an app or specific build version`,
 }
 
@@ -70,6 +72,23 @@ Examples:
 	RunE: runBuildUpload,
 }
 
+// buildRemoteCmd builds remotely and registers the resulting artifact.
+var buildRemoteCmd = &cobra.Command{
+	Use:   "remote",
+	Short: "Build on a dedicated Revyl cloud runner",
+	Long: `Build the app on a dedicated Revyl cloud runner and register the
+resulting artifact as a Revyl build version.
+
+By default, this command packages the current working tree, including
+uncommitted edits. Use --committed-only to build the committed tree at HEAD.`,
+	Example: `  revyl build remote --platform ios
+  revyl build remote --platform android
+  revyl build remote --platform android --json
+  revyl build remote --platform android --no-wait
+  revyl build remote --platform android --clean`,
+	RunE: runBuildRemote,
+}
+
 // buildListCmd lists uploaded build versions.
 var buildListCmd = &cobra.Command{
 	Use:   "list",
@@ -108,31 +127,57 @@ Examples:
 	RunE: runDeleteBuild,
 }
 
+// buildCancelCmd cancels a running remote build job.
+var buildCancelCmd = &cobra.Command{
+	Use:   "cancel <build-job-id>",
+	Short: "Cancel a running remote build",
+	Long: `Cancel a running remote build by its build job ID.
+
+The job ID is returned by "revyl build remote --no-wait" and shown in JSON
+output from "revyl build remote --json".`,
+	Example: `  revyl build cancel <build-job-id>
+  revyl build cancel <build-job-id> --json`,
+	Args: cobra.ExactArgs(1),
+	RunE: runCancelBuild,
+}
+
 var (
-	buildSkip          bool
-	buildVersion       string
-	buildSetCurr       bool
-	appIDFlag          string
-	buildPlatform      string
-	uploadAppFlag      string
-	uploadPlatformFlag string
-	uploadNameFlag     string
-	uploadFileFlag     string
-	uploadURLFlag      string
-	uploadHeaderFlags  []string
-	uploadYesFlag      bool
-	buildListJSON      bool
-	buildListBranch    string
-	buildUploadJSON    bool
-	buildDryRun        bool
-	uploadSchemeFlag   string
-	uploadRemoteFlag   bool
-	uploadCleanFlag    bool
+	buildSkip           bool
+	buildVersion        string
+	buildSetCurr        bool
+	appIDFlag           string
+	buildPlatform       string
+	uploadAppFlag       string
+	uploadPlatformFlag  string
+	uploadNameFlag      string
+	uploadFileFlag      string
+	uploadURLFlag       string
+	uploadHeaderFlags   []string
+	uploadYesFlag       bool
+	buildListJSON       bool
+	buildListBranch     string
+	buildUploadJSON     bool
+	buildDryRun         bool
+	uploadSchemeFlag    string
+	uploadRemoteFlag    bool
+	uploadCleanFlag     bool
+	remotePlatformFlag  string
+	remoteAppFlag       string
+	remoteVersionFlag   string
+	remoteSetCurrFlag   bool
+	remoteJSONFlag      bool
+	remoteNoWaitFlag    bool
+	remoteCleanFlag     bool
+	remoteKeepDDFlag    bool
+	remoteRunnerFlag    string
+	remoteCommittedOnly bool
 )
 
 func init() {
 	buildCmd.AddCommand(buildUploadCmd)
+	buildCmd.AddCommand(buildRemoteCmd)
 	buildCmd.AddCommand(buildListCmd)
+	buildCmd.AddCommand(buildCancelCmd)
 	buildCmd.AddCommand(buildDeleteCmd)
 
 	buildDeleteCmd.Flags().BoolVarP(&deleteForce, "force", "f", false, "Skip confirmation prompt")
@@ -152,8 +197,19 @@ func init() {
 	buildUploadCmd.Flags().StringArrayVar(&uploadHeaderFlags, "header", nil, `HTTP header for authenticated URL downloads (repeatable, format "Name: value")`)
 	buildUploadCmd.Flags().StringVar(&uploadSchemeFlag, "scheme", "", "Xcode scheme to use for iOS builds (overrides config)")
 	buildUploadCmd.Flags().BoolVar(&uploadRemoteFlag, "remote", false, "Build remotely on a dedicated Revyl cloud runner")
-	buildUploadCmd.Flags().BoolVar(&uploadCleanFlag, "clean", false, "Wipe cached DerivedData before building (remote only)")
-	buildUploadCmd.Flags().Bool("include-dirty", false, "Proceed with remote build even if there are uncommitted changes")
+	buildUploadCmd.Flags().BoolVar(&uploadCleanFlag, "clean", false, "Request a clean remote build (remote only)")
+	buildUploadCmd.Flags().Bool("include-dirty", false, "Include current working-tree edits in legacy remote builds")
+
+	buildRemoteCmd.Flags().StringVar(&remotePlatformFlag, "platform", "ios", "Platform to build for (ios, android)")
+	buildRemoteCmd.Flags().StringVar(&remoteAppFlag, "app", "", "App ID to upload to (overrides .revyl/config.yaml)")
+	buildRemoteCmd.Flags().StringVar(&remoteVersionFlag, "version", "", "Version string for the remote build (default: auto-generated)")
+	buildRemoteCmd.Flags().BoolVar(&remoteSetCurrFlag, "set-current", false, "Set this version as the current version")
+	buildRemoteCmd.Flags().BoolVar(&remoteJSONFlag, "json", false, "Output result as JSON")
+	buildRemoteCmd.Flags().BoolVar(&remoteNoWaitFlag, "no-wait", false, "Queue the remote build and exit without polling")
+	buildRemoteCmd.Flags().BoolVar(&remoteCleanFlag, "clean", false, "Request a clean remote build")
+	buildRemoteCmd.Flags().BoolVar(&remoteKeepDDFlag, "keep-derived-data", false, "Preserve remote iOS DerivedData between builds")
+	buildRemoteCmd.Flags().StringVar(&remoteRunnerFlag, "runner", "", "Target a specific remote build runner ID")
+	buildRemoteCmd.Flags().BoolVar(&remoteCommittedOnly, "committed-only", false, "Build committed files at HEAD instead of the current working tree")
 
 	buildListCmd.Flags().StringVar(&appIDFlag, "app", "", "App name or ID to list builds for")
 	buildListCmd.Flags().StringVar(&buildPlatform, "platform", "", "Filter by platform (android, ios) when listing org apps")

@@ -68,6 +68,37 @@ func TestWsURLToHTTP(t *testing.T) {
 	}
 }
 
+func TestWaitForWorkerURLReturnsTerminalStatus(t *testing.T) {
+	t.Parallel()
+
+	const workflowRunID = "77777777-7777-7777-7777-777777777777"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/execution/streaming/worker-connection/"+workflowRunID {
+			_, _ = w.Write([]byte(`{"status":"stopped","workflow_run_id":"` + workflowRunID + `","message":"Session completed"}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	mgr := &DeviceSessionManager{
+		apiClient: api.NewClientWithBaseURL("test-key", server.URL),
+	}
+
+	started := time.Now()
+	_, err := mgr.waitForWorkerURL(context.Background(), workflowRunID, 5*time.Second)
+	if err == nil {
+		t.Fatal("expected terminal session status error")
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("waitForWorkerURL took %s; expected terminal status to return immediately", elapsed)
+	}
+	if !strings.Contains(err.Error(), "Session completed") {
+		t.Fatalf("error = %q, want terminal status message", err.Error())
+	}
+}
+
 // ---------------------------------------------------------------------------
 // TestDeviceSessionManager_GetActive_NoSession: GetActive returns nil when
 // no session is active.
@@ -946,6 +977,111 @@ func TestDeviceSessionManager_StartSession_PropagatesDirectAppURLToStartDevice(t
 	}
 	if capturedStartReq.AppURL != appURL {
 		t.Fatalf("start_device app_url = %q, want %q", capturedStartReq.AppURL, appURL)
+	}
+}
+
+func TestDeviceSessionManager_StartSession_PropagatesSkipAppInstall(t *testing.T) {
+	t.Parallel()
+
+	const workflowRunID = "00000000-0000-0000-0000-000000000006"
+
+	var capturedStartReq struct {
+		RunConfig struct {
+			ExecutionMode struct {
+				SkipAppInstall bool `json:"skip_app_install"`
+			} `json:"execution_mode"`
+		} `json:"run_config"`
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/execution/start_device":
+			if err := json.NewDecoder(r.Body).Decode(&capturedStartReq); err != nil {
+				t.Fatalf("decode start_device request: %v", err)
+			}
+			_, _ = w.Write([]byte(`{"workflow_run_id":"` + workflowRunID + `"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/execution/streaming/worker-connection/"+workflowRunID:
+			_, _ = w.Write([]byte(`{"status":"ready","workflow_run_id":"` + workflowRunID + `","worker_ws_url":"ws://` + r.Host + `/ws/stream?token=test"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/execution/device-proxy/"+workflowRunID+"/health":
+			_, _ = w.Write([]byte(`{"status":"ok","device_connected":true}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	mgr := &DeviceSessionManager{
+		apiClient:   api.NewClientWithBaseURL("test-key", server.URL),
+		sessions:    make(map[int]*DeviceSession),
+		idleTimers:  make(map[int]*time.Timer),
+		activeIndex: -1,
+	}
+
+	_, session, err := mgr.StartSession(context.Background(), StartSessionOptions{
+		Platform:       "android",
+		SkipAppInstall: true,
+	})
+	if err != nil {
+		t.Fatalf("StartSession returned error: %v", err)
+	}
+	if session == nil {
+		t.Fatal("expected non-nil session")
+	}
+	if !capturedStartReq.RunConfig.ExecutionMode.SkipAppInstall {
+		t.Fatal("start_device run_config.execution_mode.skip_app_install = false, want true")
+	}
+}
+
+func TestDeviceSessionManager_StartSession_PropagatesDeviceRunnerID(t *testing.T) {
+	t.Parallel()
+
+	const (
+		deviceRunnerID = "revyl-kendrick-local-android"
+		workflowRunID  = "00000000-0000-0000-0000-000000000005"
+	)
+
+	var capturedStartReq struct {
+		DeviceRunnerID string `json:"device_runner_id"`
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/execution/start_device":
+			if err := json.NewDecoder(r.Body).Decode(&capturedStartReq); err != nil {
+				t.Fatalf("decode start_device request: %v", err)
+			}
+			_, _ = w.Write([]byte(`{"workflow_run_id":"` + workflowRunID + `"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/execution/streaming/worker-connection/"+workflowRunID:
+			_, _ = w.Write([]byte(`{"status":"ready","workflow_run_id":"` + workflowRunID + `","worker_ws_url":"ws://` + r.Host + `/ws/stream?token=test"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/execution/device-proxy/"+workflowRunID+"/health":
+			_, _ = w.Write([]byte(`{"status":"ok","device_connected":true}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	mgr := &DeviceSessionManager{
+		apiClient:   api.NewClientWithBaseURL("test-key", server.URL),
+		sessions:    make(map[int]*DeviceSession),
+		idleTimers:  make(map[int]*time.Timer),
+		activeIndex: -1,
+	}
+
+	_, session, err := mgr.StartSession(context.Background(), StartSessionOptions{
+		Platform:       "android",
+		DeviceRunnerID: "  " + deviceRunnerID + "  ",
+	})
+	if err != nil {
+		t.Fatalf("StartSession returned error: %v", err)
+	}
+	if session == nil {
+		t.Fatal("expected non-nil session")
+	}
+	if capturedStartReq.DeviceRunnerID != deviceRunnerID {
+		t.Fatalf("start_device device_runner_id = %q, want %q", capturedStartReq.DeviceRunnerID, deviceRunnerID)
 	}
 }
 

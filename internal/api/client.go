@@ -356,6 +356,11 @@ func parseAPIErrorBody(statusCode int, body []byte) *APIError {
 		Error   string          `json:"error"`
 		Detail  json.RawMessage `json:"detail"`
 		Message string          `json:"message"`
+		Errors  []struct {
+			Field   string `json:"field"`
+			Message string `json:"message"`
+			Type    string `json:"type"`
+		} `json:"errors"`
 	}
 	_ = json.Unmarshal(body, &errResp)
 
@@ -403,6 +408,30 @@ func parseAPIErrorBody(statusCode int, body []byte) *APIError {
 		}
 	}
 
+	if len(errResp.Errors) > 0 {
+		var parts []string
+		for _, validationErr := range errResp.Errors {
+			part := strings.TrimSpace(validationErr.Message)
+			field := strings.TrimSpace(validationErr.Field)
+			if field != "" && part != "" {
+				part = fmt.Sprintf("%s: %s", field, part)
+			} else if field != "" {
+				part = field
+			}
+			if part != "" {
+				parts = append(parts, part)
+			}
+		}
+		if len(parts) > 0 {
+			validationDetail := strings.Join(parts, "; ")
+			if detail == "" || detail == "null" {
+				detail = validationDetail
+			} else if !strings.Contains(detail, validationDetail) {
+				detail = strings.TrimSpace(detail + "; " + validationDetail)
+			}
+		}
+	}
+
 	return &APIError{
 		StatusCode:   statusCode,
 		Message:      message,
@@ -440,6 +469,10 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 // doRequestOnce performs a single HTTP request without retries.
 // Use this for endpoints where retrying is unlikely to help (e.g. deterministic failures).
 func (c *Client) doRequestOnce(ctx context.Context, method, path string, body interface{}) (*http.Response, error) {
+	return c.doRequestOnceWithClient(ctx, method, path, body, c.httpClient)
+}
+
+func (c *Client) doRequestOnceWithClient(ctx context.Context, method, path string, body interface{}, client *http.Client) (*http.Response, error) {
 	reqURL := c.baseURL + path
 
 	var bodyReader io.Reader
@@ -464,7 +497,10 @@ func (c *Client) doRequestOnce(ctx context.Context, method, path string, body in
 	req.Header.Set("X-Revyl-Client", "cli")
 	setCIHeaders(req)
 
-	resp, err := c.httpClient.Do(req)
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -2599,6 +2635,9 @@ type StartDeviceRequest struct {
 	// OsVersion overrides the target OS runtime (e.g. "iOS 18.5", "Android 14").
 	OsVersion string `json:"os_version,omitempty"`
 
+	// DeviceRunnerID pins the session to a specific worker DEVICE_ID label.
+	DeviceRunnerID string `json:"device_runner_id,omitempty"`
+
 	// SessionID allows callers to pre-generate the canonical device session identifier.
 	SessionID string `json:"session_id,omitempty"`
 
@@ -2613,6 +2652,17 @@ type DeviceRunConfig struct {
 
 	// TimeoutSeconds is the maximum execution time in seconds.
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+
+	// ExecutionMode contains execution-mode flags understood by the backend.
+	ExecutionMode *DeviceExecutionModeConfig `json:"execution_mode,omitempty"`
+}
+
+// DeviceExecutionModeConfig contains execution behavior flags for device sessions.
+type DeviceExecutionModeConfig struct {
+	// SkipAppInstall prevents the backend boot path from installing the app.
+	// Dev-loop flows use this so the CLI-owned install/relaunch step is the
+	// single source of truth.
+	SkipAppInstall bool `json:"skip_app_install,omitempty"`
 }
 
 // StartDevice starts a device session for interactive test creation.
@@ -4137,6 +4187,10 @@ var proxyNoRetryActions = map[string]bool{
 	"execute_step": true,
 }
 
+var proxyLongRunningActions = map[string]bool{
+	"install": true,
+}
+
 func (c *Client) ProxyWorkerRequest(ctx context.Context, workflowRunID, action string, body interface{}) ([]byte, int, error) {
 	path := fmt.Sprintf("/api/v1/execution/device-proxy/%s/%s", workflowRunID, action)
 
@@ -4147,7 +4201,9 @@ func (c *Client) ProxyWorkerRequest(ctx context.Context, workflowRunID, action s
 
 	var resp *http.Response
 	var err error
-	if proxyNoRetryActions[action] {
+	if proxyLongRunningActions[action] {
+		resp, err = c.doRequestOnceWithClient(ctx, method, path, body, c.uploadClient)
+	} else if proxyNoRetryActions[action] {
 		resp, err = c.doRequestOnce(ctx, method, path, body)
 	} else {
 		resp, err = c.doRequest(ctx, method, path, body)
@@ -5202,11 +5258,11 @@ func (c *Client) GetSessionArtifactUploadURL(ctx context.Context, sessionID stri
 }
 
 // ---------------------------------------------------------------------------
-// Remote iOS Build
+// Remote Build
 // ---------------------------------------------------------------------------
 
 // GetRemoteBuildUploadURL obtains a presigned S3 URL for uploading a source
-// archive used by a remote iOS build.
+// archive used by a remote build.
 //
 // Parameters:
 //   - ctx: cancellation context
@@ -5234,7 +5290,7 @@ func (c *Client) GetRemoteBuildUploadURL(ctx context.Context, appID, filename st
 	return &result, nil
 }
 
-// TriggerRemoteBuild dispatches a remote iOS build job via the backend.
+// TriggerRemoteBuild dispatches a remote build job via the backend.
 //
 // Parameters:
 //   - ctx: cancellation context
@@ -5279,19 +5335,31 @@ func (c *Client) GetRemoteBuildStatus(ctx context.Context, buildJobID string) (*
 
 // BuildRunnerStatus is defined in generated.go from the OpenAPI schema.
 
-// CheckBuildRunnersAvailable queries the backend for active iOS build
+// CheckBuildRunnersAvailable queries the backend for active build
 // runners assigned to the caller's organisation. Used as a pre-flight
 // check before uploading source to avoid wasting time when no runner
 // is available.
 //
 // Parameters:
 //   - ctx: cancellation context
+//   - platform: build platform ("ios" or "android")
 //
 // Returns:
 //   - *BuildRunnerStatus with availability flag and runner count
 //   - error on API or network failure
-func (c *Client) CheckBuildRunnersAvailable(ctx context.Context) (*BuildRunnerStatus, error) {
-	resp, err := c.doRequest(ctx, "GET", "/api/v1/apps/remote/runners/available", nil)
+func (c *Client) CheckBuildRunnersAvailable(ctx context.Context, platform string, runnerID ...string) (*BuildRunnerStatus, error) {
+	path := "/api/v1/apps/remote/runners/available"
+	values := url.Values{}
+	if strings.TrimSpace(platform) != "" {
+		values.Set("platform", strings.TrimSpace(platform))
+	}
+	if len(runnerID) > 0 && strings.TrimSpace(runnerID[0]) != "" {
+		values.Set("runner_id", strings.TrimSpace(runnerID[0]))
+	}
+	if encoded := values.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	resp, err := c.doRequest(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -211,12 +212,21 @@ func readProviderRuntimeFailure(t *testing.T, failures <-chan hotreload.RuntimeF
 func withFakeNpxReadyProcess(t *testing.T) {
 	t.Helper()
 	binDir := t.TempDir()
-	npxPath := filepath.Join(binDir, "npx")
+	npxName := "npx"
 	script := `#!/bin/sh
 echo "Metro waiting on exp://127.0.0.1:8081"
 trap 'exit 0' TERM INT
 while true; do sleep 1; done
 `
+	if runtime.GOOS == "windows" {
+		npxName = "npx.cmd"
+		script = "@echo off\r\n" +
+			"echo Metro waiting on exp://127.0.0.1:8081\r\n" +
+			":loop\r\n" +
+			"timeout /t 1 /nobreak >nul\r\n" +
+			"goto loop\r\n"
+	}
+	npxPath := filepath.Join(binDir, npxName)
 	if err := os.WriteFile(npxPath, []byte(script), 0755); err != nil {
 		t.Fatalf("write fake npx: %v", err)
 	}
