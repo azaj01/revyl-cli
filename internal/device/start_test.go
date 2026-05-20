@@ -39,6 +39,7 @@ func TestResolveStartArtifact_UsesLatestBuildForApp(t *testing.T) {
 		detailByBuild: map[string]*api.BuildVersionDetail{
 			"build-1": {
 				ID:          "build-1",
+				AppID:       "app-1",
 				DownloadURL: "https://artifact.example/app.ipa",
 				PackageName: "com.example.app",
 			},
@@ -50,8 +51,41 @@ func TestResolveStartArtifact_UsesLatestBuildForApp(t *testing.T) {
 	if resolved.AppURL != "https://artifact.example/app.ipa" {
 		t.Fatalf("AppURL = %q, want %q", resolved.AppURL, "https://artifact.example/app.ipa")
 	}
+	if resolved.AppID != "app-1" {
+		t.Fatalf("AppID = %q, want %q", resolved.AppID, "app-1")
+	}
+	if resolved.BuildID != "build-1" {
+		t.Fatalf("BuildID = %q, want %q", resolved.BuildID, "build-1")
+	}
 	if resolved.AppPackage != "com.example.app" {
 		t.Fatalf("AppPackage = %q, want %q", resolved.AppPackage, "com.example.app")
+	}
+}
+
+func TestResolveStartArtifact_CarriesBuildVersionIdentity(t *testing.T) {
+	t.Parallel()
+
+	resolved, err := ResolveStartArtifact(context.Background(), stubArtifactResolver{
+		detailByBuild: map[string]*api.BuildVersionDetail{
+			"build-2": {
+				ID:          "build-2",
+				AppID:       "app-2",
+				DownloadURL: "https://artifact.example/build.ipa",
+				PackageName: "com.example.build",
+			},
+		},
+	}, StartArtifactOptions{BuildVersionID: " build-2 "})
+	if err != nil {
+		t.Fatalf("ResolveStartArtifact returned error: %v", err)
+	}
+	if resolved.AppID != "app-2" {
+		t.Fatalf("AppID = %q, want %q", resolved.AppID, "app-2")
+	}
+	if resolved.BuildID != "build-2" {
+		t.Fatalf("BuildID = %q, want %q", resolved.BuildID, "build-2")
+	}
+	if resolved.AppURL != "https://artifact.example/build.ipa" {
+		t.Fatalf("AppURL = %q, want %q", resolved.AppURL, "https://artifact.example/build.ipa")
 	}
 }
 

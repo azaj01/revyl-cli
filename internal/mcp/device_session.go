@@ -361,6 +361,12 @@ func (m *DeviceSessionManager) StartSession(
 	if strings.TrimSpace(opts.TestID) != "" {
 		req.TestID = strings.TrimSpace(opts.TestID)
 	}
+	if resolvedArtifact.AppID != "" {
+		req.AppID = resolvedArtifact.AppID
+	}
+	if resolvedArtifact.BuildID != "" {
+		req.BuildID = resolvedArtifact.BuildID
+	}
 	if resolvedArtifact.AppURL != "" {
 		req.AppURL = resolvedArtifact.AppURL
 	}

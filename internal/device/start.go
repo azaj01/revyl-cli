@@ -35,6 +35,8 @@ type StartArtifactOptions struct {
 
 // ResolvedStartArtifact is the concrete app artifact payload sent to start_device.
 type ResolvedStartArtifact struct {
+	AppID      string
+	BuildID    string
 	AppURL     string
 	AppPackage string
 }
@@ -46,6 +48,8 @@ func ResolveStartArtifact(
 	opts StartArtifactOptions,
 ) (ResolvedStartArtifact, error) {
 	artifact := ResolvedStartArtifact{
+		AppID:      strings.TrimSpace(opts.AppID),
+		BuildID:    strings.TrimSpace(opts.BuildVersionID),
 		AppURL:     strings.TrimSpace(opts.AppURL),
 		AppPackage: strings.TrimSpace(opts.AppPackage),
 	}
@@ -60,6 +64,9 @@ func ResolveStartArtifact(
 			return ResolvedStartArtifact{}, fmt.Errorf("build version %s has no download URL", buildVersionID)
 		}
 		artifact.AppURL = strings.TrimSpace(detail.DownloadURL)
+		if detailAppID := strings.TrimSpace(detail.AppID); detailAppID != "" {
+			artifact.AppID = detailAppID
+		}
 		if artifact.AppPackage == "" {
 			artifact.AppPackage = strings.TrimSpace(detail.PackageName)
 		}
@@ -75,7 +82,8 @@ func ResolveStartArtifact(
 			return ResolvedStartArtifact{}, fmt.Errorf("no builds found for app %s", appID)
 		}
 
-		detail, err := resolver.GetBuildVersionDownloadURL(ctx, strings.TrimSpace(latest.ID))
+		artifact.BuildID = strings.TrimSpace(latest.ID)
+		detail, err := resolver.GetBuildVersionDownloadURL(ctx, artifact.BuildID)
 		if err != nil {
 			return ResolvedStartArtifact{}, fmt.Errorf("failed to resolve latest build artifact for app %s: %w", appID, err)
 		}
@@ -83,6 +91,9 @@ func ResolveStartArtifact(
 			return ResolvedStartArtifact{}, fmt.Errorf("latest build for app %s has no download URL", appID)
 		}
 		artifact.AppURL = strings.TrimSpace(detail.DownloadURL)
+		if detailAppID := strings.TrimSpace(detail.AppID); detailAppID != "" {
+			artifact.AppID = detailAppID
+		}
 		if artifact.AppPackage == "" {
 			artifact.AppPackage = strings.TrimSpace(detail.PackageName)
 		}

@@ -1838,6 +1838,138 @@ type App struct {
 	VersionsCount  int    `json:"versions_count"`
 }
 
+// AtlasQuery carries the shared filters supported by Atlas inspection endpoints.
+type AtlasQuery struct {
+	AppID           string
+	BuildID         string
+	ReportID        string
+	TestID          string
+	SourceKind      string
+	FromTime        string
+	ToTime          string
+	SurfaceScope    string
+	Visibility      string
+	IncludeVariants bool
+	Limit           int
+	Query           string
+	Direction       string
+	LeftEntityID    string
+	RightEntityID   string
+}
+
+// AtlasResponse is a generic JSON object returned by Atlas inspection endpoints.
+type AtlasResponse map[string]interface{}
+
+func (q AtlasQuery) values() url.Values {
+	values := url.Values{}
+	if q.BuildID != "" {
+		values.Set("build_id", q.BuildID)
+	}
+	if q.ReportID != "" {
+		values.Set("report_id", q.ReportID)
+	}
+	if q.TestID != "" {
+		values.Set("test_id", q.TestID)
+	}
+	if q.SourceKind != "" {
+		values.Set("source_kind", q.SourceKind)
+	}
+	if q.FromTime != "" {
+		values.Set("from_time", q.FromTime)
+	}
+	if q.ToTime != "" {
+		values.Set("to_time", q.ToTime)
+	}
+	if q.SurfaceScope != "" {
+		values.Set("surface_scope", q.SurfaceScope)
+	}
+	if q.Visibility != "" {
+		values.Set("visibility", q.Visibility)
+	}
+	if q.IncludeVariants {
+		values.Set("include_variants", "true")
+	}
+	if q.Limit > 0 {
+		values.Set("limit", fmt.Sprintf("%d", q.Limit))
+	}
+	if q.Query != "" {
+		values.Set("q", q.Query)
+	}
+	if q.Direction != "" {
+		values.Set("direction", q.Direction)
+	}
+	if q.LeftEntityID != "" {
+		values.Set("left_entity_id", q.LeftEntityID)
+	}
+	if q.RightEntityID != "" {
+		values.Set("right_entity_id", q.RightEntityID)
+	}
+	return values
+}
+
+func (c *Client) getAtlas(ctx context.Context, path string, query AtlasQuery) (AtlasResponse, error) {
+	values := query.values()
+	if encoded := values.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	resp, err := c.doRequest(ctx, "GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	var result AtlasResponse
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = AtlasResponse{}
+	}
+	return result, nil
+}
+
+func (c *Client) GetAtlasOverview(ctx context.Context, query AtlasQuery) (AtlasResponse, error) {
+	return c.getAtlas(ctx, fmt.Sprintf("/api/v1/atlas/v2/apps/%s/overview", url.PathEscape(query.AppID)), query)
+}
+
+func (c *Client) GetAtlasGraph(ctx context.Context, query AtlasQuery) (AtlasResponse, error) {
+	return c.getAtlas(ctx, fmt.Sprintf("/api/v1/atlas/v2/apps/%s/graph", url.PathEscape(query.AppID)), query)
+}
+
+func (c *Client) GetAtlasStructure(ctx context.Context, query AtlasQuery) (AtlasResponse, error) {
+	return c.getAtlas(ctx, fmt.Sprintf("/api/v1/atlas/v2/apps/%s/structure", url.PathEscape(query.AppID)), query)
+}
+
+func (c *Client) GetAtlasEntity(ctx context.Context, query AtlasQuery, entityID string) (AtlasResponse, error) {
+	return c.getAtlas(ctx, fmt.Sprintf("/api/v1/atlas/v2/apps/%s/entities/%s", url.PathEscape(query.AppID), url.PathEscape(entityID)), query)
+}
+
+func (c *Client) GetAtlasEntityObservations(ctx context.Context, query AtlasQuery, entityID string) (AtlasResponse, error) {
+	return c.getAtlas(ctx, fmt.Sprintf("/api/v1/atlas/v2/apps/%s/entities/%s/observations", url.PathEscape(query.AppID), url.PathEscape(entityID)), query)
+}
+
+func (c *Client) GetAtlasEntityNeighbors(ctx context.Context, query AtlasQuery, entityID string) (AtlasResponse, error) {
+	return c.getAtlas(ctx, fmt.Sprintf("/api/v1/atlas/v2/apps/%s/entities/%s/neighbors", url.PathEscape(query.AppID), url.PathEscape(entityID)), query)
+}
+
+func (c *Client) GetAtlasEntityCandidates(ctx context.Context, query AtlasQuery, entityID string) (AtlasResponse, error) {
+	return c.getAtlas(ctx, fmt.Sprintf("/api/v1/atlas/v2/apps/%s/entities/%s/candidates", url.PathEscape(query.AppID), url.PathEscape(entityID)), query)
+}
+
+func (c *Client) GetAtlasObservation(ctx context.Context, query AtlasQuery, observationID string) (AtlasResponse, error) {
+	return c.getAtlas(ctx, fmt.Sprintf("/api/v1/atlas/v2/apps/%s/observations/%s", url.PathEscape(query.AppID), url.PathEscape(observationID)), query)
+}
+
+func (c *Client) GetAtlasFlows(ctx context.Context, query AtlasQuery) (AtlasResponse, error) {
+	return c.getAtlas(ctx, fmt.Sprintf("/api/v1/atlas/v2/apps/%s/flows", url.PathEscape(query.AppID)), query)
+}
+
+func (c *Client) SearchAtlas(ctx context.Context, query AtlasQuery) (AtlasResponse, error) {
+	return c.getAtlas(ctx, fmt.Sprintf("/api/v1/atlas/v2/apps/%s/search", url.PathEscape(query.AppID)), query)
+}
+
+func (c *Client) CompareAtlasEntities(ctx context.Context, query AtlasQuery) (AtlasResponse, error) {
+	return c.getAtlas(ctx, fmt.Sprintf("/api/v1/atlas/v2/apps/%s/compare", url.PathEscape(query.AppID)), query)
+}
+
 // CLIPaginatedAppsResponse represents a paginated list of apps.
 // This is a CLI-specific type that uses App instead of the generated type.
 type CLIPaginatedAppsResponse struct {
@@ -2612,6 +2744,9 @@ type StartDeviceRequest struct {
 
 	// AppID is the CogniSim apps table UUID (latest build is resolved server-side).
 	AppID string `json:"app_id,omitempty"`
+
+	// BuildID is the CogniSim builds table UUID for the installed artifact.
+	BuildID string `json:"build_id,omitempty"`
 
 	// AppURL is a downloadable app artifact URL (.apk/.ipa/.zip).
 	AppURL string `json:"app_url,omitempty"`

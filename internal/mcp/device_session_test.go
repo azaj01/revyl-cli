@@ -881,13 +881,15 @@ func TestDeviceSessionManager_StartSession_PropagatesBuildPackageToStartDevice(t
 	var capturedStartReq struct {
 		AppURL     string `json:"app_url"`
 		AppPackage string `json:"app_package"`
+		AppID      string `json:"app_id"`
+		BuildID    string `json:"build_id"`
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/builds/builds/"+buildVersionID:
-			_, _ = w.Write([]byte(`{"id":"` + buildVersionID + `","version":"1","download_url":"` + downloadURL + `","package_name":"` + packageName + `"}`))
+			_, _ = w.Write([]byte(`{"id":"` + buildVersionID + `","app_id":"app-123","version":"1","download_url":"` + downloadURL + `","package_name":"` + packageName + `"}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/execution/start_device":
 			if err := json.NewDecoder(r.Body).Decode(&capturedStartReq); err != nil {
 				t.Fatalf("decode start_device request: %v", err)
@@ -925,6 +927,12 @@ func TestDeviceSessionManager_StartSession_PropagatesBuildPackageToStartDevice(t
 	}
 	if capturedStartReq.AppPackage != packageName {
 		t.Fatalf("start_device app_package = %q, want %q", capturedStartReq.AppPackage, packageName)
+	}
+	if capturedStartReq.AppID != "app-123" {
+		t.Fatalf("start_device app_id = %q, want %q", capturedStartReq.AppID, "app-123")
+	}
+	if capturedStartReq.BuildID != buildVersionID {
+		t.Fatalf("start_device build_id = %q, want %q", capturedStartReq.BuildID, buildVersionID)
 	}
 }
 

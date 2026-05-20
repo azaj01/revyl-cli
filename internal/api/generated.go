@@ -35,8 +35,8 @@ const (
 
 // Defines values for ActionBlockVariableScope.
 const (
-	Global ActionBlockVariableScope = "global"
-	Test   ActionBlockVariableScope = "test"
+	ActionBlockVariableScopeGlobal ActionBlockVariableScope = "global"
+	ActionBlockVariableScopeTest   ActionBlockVariableScope = "test"
 )
 
 // Defines values for AdminOnboardingOrgDetailCurrentState.
@@ -78,6 +78,16 @@ const (
 	AsyncStatusInitializing AsyncStatus = "initializing"
 	AsyncStatusQueued       AsyncStatus = "queued"
 	AsyncStatusRunning      AsyncStatus = "running"
+)
+
+// Defines values for AtlasV2LayerJobStatus.
+const (
+	AtlasV2LayerJobStatusCancelled AtlasV2LayerJobStatus = "cancelled"
+	AtlasV2LayerJobStatusCompleted AtlasV2LayerJobStatus = "completed"
+	AtlasV2LayerJobStatusFailed    AtlasV2LayerJobStatus = "failed"
+	AtlasV2LayerJobStatusQueued    AtlasV2LayerJobStatus = "queued"
+	AtlasV2LayerJobStatusRunning   AtlasV2LayerJobStatus = "running"
+	AtlasV2LayerJobStatusSkipped   AtlasV2LayerJobStatus = "skipped"
 )
 
 // Defines values for AttachRequestBillingPeriod.
@@ -401,13 +411,13 @@ const (
 
 // Defines values for WorkflowStatus.
 const (
-	WorkflowStatusCancelled WorkflowStatus = "cancelled"
-	WorkflowStatusCompleted WorkflowStatus = "completed"
-	WorkflowStatusFailed    WorkflowStatus = "failed"
-	WorkflowStatusQueued    WorkflowStatus = "queued"
-	WorkflowStatusRunning   WorkflowStatus = "running"
-	WorkflowStatusSetup     WorkflowStatus = "setup"
-	WorkflowStatusTimeout   WorkflowStatus = "timeout"
+	Cancelled WorkflowStatus = "cancelled"
+	Completed WorkflowStatus = "completed"
+	Failed    WorkflowStatus = "failed"
+	Queued    WorkflowStatus = "queued"
+	Running   WorkflowStatus = "running"
+	Setup     WorkflowStatus = "setup"
+	Timeout   WorkflowStatus = "timeout"
 )
 
 // Defines values for QueryTestsEndpointApiV1TestsGetTestsGetParamsStatus.
@@ -709,19 +719,19 @@ type AdminTestExecution struct {
 	CompletedAt      *time.Time `json:"completed_at"`
 	CurrentStep      *string    `json:"current_step"`
 	CurrentStepIndex *int       `json:"current_step_index"`
-	OrgId            *string    `json:"org_id"`
-	OrgName          *string    `json:"org_name"`
-	Platform         *string    `json:"platform"`
-	Progress         *float32   `json:"progress"`
+
+	// Id Execution ID
+	Id       string   `json:"id"`
+	OrgId    *string  `json:"org_id"`
+	OrgName  *string  `json:"org_name"`
+	Platform *string  `json:"platform"`
+	Progress *float32 `json:"progress"`
 
 	// Source Execution source: ui, cli, api, ci_cd, or workflow (was user_id)
-	Source    *string    `json:"source"`
-	StartedAt *time.Time `json:"started_at"`
-	Status    string     `json:"status"`
-	Success   *bool      `json:"success"`
-
-	// TaskId Execution ID
-	TaskId        string     `json:"task_id"`
+	Source        *string    `json:"source"`
+	StartedAt     *time.Time `json:"started_at"`
+	Status        string     `json:"status"`
+	Success       *bool      `json:"success"`
 	TestHistoryId *string    `json:"test_history_id"`
 	TestId        string     `json:"test_id"`
 	TestName      *string    `json:"test_name"`
@@ -729,8 +739,8 @@ type AdminTestExecution struct {
 	TraceId       *string    `json:"trace_id"`
 	UpdatedAt     *time.Time `json:"updated_at"`
 
-	// WorkflowTaskId Parent workflow execution ID
-	WorkflowTaskId *string `json:"workflow_task_id"`
+	// WorkflowExecutionId Parent workflow execution ID
+	WorkflowExecutionId *string `json:"workflow_execution_id"`
 }
 
 // AdminTestExecutionList defines model for AdminTestExecutionList.
@@ -811,20 +821,20 @@ type AdminWorkflowTask struct {
 	CompletedTests   *int     `json:"completed_tests"`
 	ConcurrencyLimit *int     `json:"concurrency_limit"`
 	DurationSeconds  *float32 `json:"duration_seconds"`
-	OrgId            *string  `json:"org_id"`
-	OrgName          *string  `json:"org_name"`
+
+	// Id Execution ID
+	Id      string  `json:"id"`
+	OrgId   *string `json:"org_id"`
+	OrgName *string `json:"org_name"`
 
 	// Progress 0-1 progress ratio
 	Progress *float32 `json:"progress"`
 
 	// Source Execution source: ui, cli, api, ci_cd, or workflow (was user_id)
-	Source    *string    `json:"source"`
-	StartedAt *time.Time `json:"started_at"`
-	Status    string     `json:"status"`
-	Success   *bool      `json:"success"`
-
-	// TaskId Execution ID
-	TaskId       string     `json:"task_id"`
+	Source       *string    `json:"source"`
+	StartedAt    *time.Time `json:"started_at"`
+	Status       string     `json:"status"`
+	Success      *bool      `json:"success"`
 	TotalTests   *int       `json:"total_tests"`
 	TraceId      *string    `json:"trace_id"`
 	UpdatedAt    *time.Time `json:"updated_at"`
@@ -1041,6 +1051,7 @@ type AppPlatformCounts struct {
 type AppResponse struct {
 	AttachedTests    *int                `json:"attached_tests"`
 	AttributionReady *bool               `json:"attribution_ready"`
+	BuildsCount      *int                `json:"builds_count"`
 	CreatedAt        *time.Time          `json:"created_at"`
 	CurrentBuildId   *openapi_types.UUID `json:"current_build_id"`
 	CurrentVersion   *string             `json:"current_version"`
@@ -1110,6 +1121,224 @@ type AppWorkspaceResponse struct {
 
 // AsyncStatus defines model for AsyncStatus.
 type AsyncStatus string
+
+// AtlasOCRError defines model for AtlasOCRError.
+type AtlasOCRError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// AtlasOCRLine defines model for AtlasOCRLine.
+type AtlasOCRLine struct {
+	Bbox                 *[]float32             `json:"bbox,omitempty"`
+	Confidence           *float32               `json:"confidence"`
+	Text                 *string                `json:"text,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// AtlasOCRSummary defines model for AtlasOCRSummary.
+type AtlasOCRSummary struct {
+	Error                *AtlasOCRError         `json:"error,omitempty"`
+	ImportantTokens      *[]string              `json:"important_tokens,omitempty"`
+	Lines                *[]AtlasOCRLine        `json:"lines,omitempty"`
+	Ok                   *bool                  `json:"ok,omitempty"`
+	Provider             *string                `json:"provider,omitempty"`
+	Stats                *AtlasOCRSummaryStats  `json:"stats,omitempty"`
+	Text                 *string                `json:"text,omitempty"`
+	Tokens               *[]string              `json:"tokens,omitempty"`
+	Version              *string                `json:"version,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// AtlasOCRSummaryStats defines model for AtlasOCRSummaryStats.
+type AtlasOCRSummaryStats struct {
+	AvgConfidence        *float32               `json:"avg_confidence"`
+	BatchLatencyMs       *float32               `json:"batch_latency_ms"`
+	ImportantTokenCount  *int                   `json:"important_token_count,omitempty"`
+	LatencyMs            *float32               `json:"latency_ms"`
+	TokenCount           *int                   `json:"token_count,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// AtlasV2BackfillScopeRequest defines model for AtlasV2BackfillScopeRequest.
+type AtlasV2BackfillScopeRequest struct {
+	AppId              string                  `json:"app_id"`
+	BuildId            *string                 `json:"build_id"`
+	FeatureVersion     *string                 `json:"feature_version,omitempty"`
+	Force              *bool                   `json:"force,omitempty"`
+	FromTime           *string                 `json:"from_time"`
+	MatchConfig        *map[string]interface{} `json:"match_config,omitempty"`
+	PromptVersion      *string                 `json:"prompt_version,omitempty"`
+	ReprocessCompleted *bool                   `json:"reprocess_completed,omitempty"`
+	ToTime             *string                 `json:"to_time"`
+}
+
+// AtlasV2Candidate defines model for AtlasV2Candidate.
+type AtlasV2Candidate struct {
+	CanonicalDisplayName        *string                 `json:"canonical_display_name"`
+	CanonicalEntityId           *string                 `json:"canonical_entity_id"`
+	DisplayName                 *string                 `json:"display_name"`
+	EmbeddingKind               *string                 `json:"embedding_kind"`
+	EmbeddingSimilarity         *float32                `json:"embedding_similarity"`
+	EntityId                    string                  `json:"entity_id"`
+	EntityKind                  string                  `json:"entity_kind"`
+	EntityPath                  *[]string               `json:"entity_path,omitempty"`
+	ExactHash                   *string                 `json:"exact_hash"`
+	OcrSummary                  *AtlasOCRSummary        `json:"ocr_summary,omitempty"`
+	ParentDisplayName           *string                 `json:"parent_display_name"`
+	ParentEntityId              *string                 `json:"parent_entity_id"`
+	PerceptualHash              *string                 `json:"perceptual_hash"`
+	PhashDistance               *int                    `json:"phash_distance"`
+	RepresentativeObservationId *string                 `json:"representative_observation_id"`
+	RootDisplayName             *string                 `json:"root_display_name"`
+	RootEntityId                string                  `json:"root_entity_id"`
+	Scores                      *map[string]interface{} `json:"scores,omitempty"`
+	ScreenKind                  *string                 `json:"screen_kind"`
+	ScreenshotS3Bucket          *string                 `json:"screenshot_s3_bucket"`
+	ScreenshotS3Key             *string                 `json:"screenshot_s3_key"`
+	ScreenshotUrl               *string                 `json:"screenshot_url"`
+	SemanticSummary             *map[string]interface{} `json:"semantic_summary,omitempty"`
+	SourceContext               *map[string]interface{} `json:"source_context,omitempty"`
+	UiFingerprint               *map[string]interface{} `json:"ui_fingerprint,omitempty"`
+	VariantKind                 *string                 `json:"variant_kind"`
+}
+
+// AtlasV2CompleteRequest defines model for AtlasV2CompleteRequest.
+type AtlasV2CompleteRequest struct {
+	Edges *[]AtlasV2EdgeObservationInput `json:"edges,omitempty"`
+	Stats *map[string]interface{}        `json:"stats,omitempty"`
+}
+
+// AtlasV2EdgeObservationBatchRequest defines model for AtlasV2EdgeObservationBatchRequest.
+type AtlasV2EdgeObservationBatchRequest struct {
+	Edges *[]AtlasV2EdgeObservationInput `json:"edges,omitempty"`
+}
+
+// AtlasV2EdgeObservationInput defines model for AtlasV2EdgeObservationInput.
+type AtlasV2EdgeObservationInput struct {
+	ActionContext       *map[string]interface{} `json:"action_context,omitempty"`
+	ActionId            string                  `json:"action_id"`
+	ActionLabel         *string                 `json:"action_label"`
+	ActionType          *string                 `json:"action_type"`
+	ExecutionId         *string                 `json:"execution_id"`
+	ObservedAt          *string                 `json:"observed_at"`
+	ReportId            string                  `json:"report_id"`
+	SessionId           *string                 `json:"session_id"`
+	SourceObservationId *string                 `json:"source_observation_id"`
+	StepId              string                  `json:"step_id"`
+	TargetObservationId *string                 `json:"target_observation_id"`
+	TestId              *string                 `json:"test_id"`
+}
+
+// AtlasV2GraphResponse defines model for AtlasV2GraphResponse.
+type AtlasV2GraphResponse struct {
+	AppId         string                    `json:"app_id"`
+	AttachedTests *[]map[string]interface{} `json:"attached_tests,omitempty"`
+	BuildId       *string                   `json:"build_id"`
+	Edges         *[]map[string]interface{} `json:"edges,omitempty"`
+	Flows         *[]map[string]interface{} `json:"flows,omitempty"`
+	Nodes         *[]map[string]interface{} `json:"nodes,omitempty"`
+	Projection    *map[string]interface{}   `json:"projection,omitempty"`
+	Stats         *map[string]interface{}   `json:"stats,omitempty"`
+	Structure     *map[string]interface{}   `json:"structure,omitempty"`
+}
+
+// AtlasV2LayerJobResponse defines model for AtlasV2LayerJobResponse.
+type AtlasV2LayerJobResponse struct {
+	AppId          string                `json:"app_id"`
+	BuildId        *string               `json:"build_id"`
+	IdempotencyKey string                `json:"idempotency_key"`
+	JobId          string                `json:"job_id"`
+	ReportId       *string               `json:"report_id"`
+	Status         AtlasV2LayerJobStatus `json:"status"`
+}
+
+// AtlasV2LayerJobStatus defines model for AtlasV2LayerJobStatus.
+type AtlasV2LayerJobStatus string
+
+// AtlasV2LayerObservationResponse defines model for AtlasV2LayerObservationResponse.
+type AtlasV2LayerObservationResponse struct {
+	AssignedEntityId     *string             `json:"assigned_entity_id"`
+	AssignedRootEntityId *string             `json:"assigned_root_entity_id"`
+	Candidates           *[]AtlasV2Candidate `json:"candidates,omitempty"`
+	DecisionId           *string             `json:"decision_id"`
+	ObservationId        string              `json:"observation_id"`
+	Reason               *string             `json:"reason"`
+	Status               string              `json:"status"`
+}
+
+// AtlasV2LayerReportRequest defines model for AtlasV2LayerReportRequest.
+type AtlasV2LayerReportRequest struct {
+	FeatureVersion *string                 `json:"feature_version,omitempty"`
+	Force          *bool                   `json:"force,omitempty"`
+	MatchConfig    *map[string]interface{} `json:"match_config,omitempty"`
+	PromptVersion  *string                 `json:"prompt_version,omitempty"`
+	ReportId       string                  `json:"report_id"`
+	Source         *string                 `json:"source,omitempty"`
+}
+
+// AtlasV2ObservationFeatureInput defines model for AtlasV2ObservationFeatureInput.
+type AtlasV2ObservationFeatureInput struct {
+	ActionId               string                  `json:"action_id"`
+	ActionIndex            int                     `json:"action_index"`
+	ActionLabel            *string                 `json:"action_label"`
+	ActionType             *string                 `json:"action_type"`
+	Embedding              *[]float32              `json:"embedding"`
+	EmbeddingDim           *int                    `json:"embedding_dim,omitempty"`
+	EmbeddingModel         *string                 `json:"embedding_model,omitempty"`
+	EmbeddingPreprocessing *string                 `json:"embedding_preprocessing,omitempty"`
+	ExactHash              *string                 `json:"exact_hash"`
+	ExclusionReason        *string                 `json:"exclusion_reason"`
+	ExecutionId            *string                 `json:"execution_id"`
+	Height                 *int                    `json:"height"`
+	ObservedAt             *string                 `json:"observed_at"`
+	OcrSummary             *AtlasOCRSummary        `json:"ocr_summary,omitempty"`
+	PerceptualHash         *string                 `json:"perceptual_hash"`
+	ReportId               string                  `json:"report_id"`
+	ScreenshotRole         string                  `json:"screenshot_role"`
+	ScreenshotS3Bucket     *string                 `json:"screenshot_s3_bucket"`
+	ScreenshotS3Key        string                  `json:"screenshot_s3_key"`
+	SessionId              *string                 `json:"session_id"`
+	SourceContext          *map[string]interface{} `json:"source_context,omitempty"`
+	SourceKind             *string                 `json:"source_kind,omitempty"`
+	StepId                 string                  `json:"step_id"`
+	StepIndex              int                     `json:"step_index"`
+	SurfaceScope           *string                 `json:"surface_scope,omitempty"`
+	TestId                 *string                 `json:"test_id"`
+	TestName               *string                 `json:"test_name"`
+	UiFingerprint          *map[string]interface{} `json:"ui_fingerprint,omitempty"`
+	VisibilityStatus       *string                 `json:"visibility_status,omitempty"`
+	Width                  *int                    `json:"width"`
+}
+
+// AtlasV2ProgressUpdate defines model for AtlasV2ProgressUpdate.
+type AtlasV2ProgressUpdate struct {
+	ErrorMessage *string                 `json:"error_message"`
+	Stats        *map[string]interface{} `json:"stats"`
+	Status       AtlasV2LayerJobStatus   `json:"status"`
+}
+
+// AtlasV2VLMDecisionRequest defines model for AtlasV2VLMDecisionRequest.
+type AtlasV2VLMDecisionRequest struct {
+	CandidateEntityId    *string                   `json:"candidate_entity_id"`
+	Confidence           *float32                  `json:"confidence"`
+	Embedding            *[]float32                `json:"embedding"`
+	EmbeddingDim         *int                      `json:"embedding_dim,omitempty"`
+	EmbeddingModel       *string                   `json:"embedding_model,omitempty"`
+	Evidence             *map[string]interface{}   `json:"evidence,omitempty"`
+	ModelName            *string                   `json:"model_name"`
+	ModelVersion         *string                   `json:"model_version"`
+	ObservationId        string                    `json:"observation_id"`
+	PromptVersion        *string                   `json:"prompt_version,omitempty"`
+	Reasoning            *string                   `json:"reasoning"`
+	RejectedCandidates   *[]map[string]interface{} `json:"rejected_candidates,omitempty"`
+	Relation             string                    `json:"relation"`
+	Scores               *map[string]interface{}   `json:"scores,omitempty"`
+	SemanticSummary      *map[string]interface{}   `json:"semantic_summary,omitempty"`
+	SuggestedScreenName  *string                   `json:"suggested_screen_name"`
+	SuggestedVariantName *string                   `json:"suggested_variant_name"`
+	VariantKind          *string                   `json:"variant_kind"`
+}
 
 // AttachRequest defines model for AttachRequest.
 type AttachRequest struct {
@@ -2693,6 +2922,8 @@ type DeviceSessionClaimStartResponse struct {
 
 // DeviceSessionCreate Request model for creating a device session.
 type DeviceSessionCreate struct {
+	AppId          *openapi_types.UUID         `json:"app_id"`
+	BuildId        *openapi_types.UUID         `json:"build_id"`
 	Id             *string                     `json:"id"`
 	OrgId          *string                     `json:"org_id"`
 	Platform       DeviceSessionCreatePlatform `json:"platform"`
@@ -2708,6 +2939,10 @@ type DeviceSessionCreatePlatform string
 // DeviceSessionDetailItem Detailed device session payload for the canonical session viewer.
 type DeviceSessionDetailItem struct {
 	ActionCount               *int                    `json:"action_count,omitempty"`
+	AppId                     *string                 `json:"app_id"`
+	AppName                   *string                 `json:"app_name"`
+	BuildId                   *string                 `json:"build_id"`
+	BuildVersion              *string                 `json:"build_version"`
 	CanCancel                 *bool                   `json:"can_cancel,omitempty"`
 	CanInteract               *bool                   `json:"can_interact,omitempty"`
 	CreatedAt                 *string                 `json:"created_at"`
@@ -3985,13 +4220,13 @@ type HotReloadRelayRevokeResponse struct {
 	Revoked bool   `json:"revoked"`
 }
 
-// IfBlockInput Block for conditional logic.
-type IfBlockInput struct {
+// IfBlock Block for conditional logic.
+type IfBlock struct {
 	// Condition Condition to evaluate (alternative to 'step_description')
 	Condition *string `json:"condition"`
 
 	// ElseChildren Blocks to execute if condition is false
-	ElseChildren *[]IfBlockInput_ElseChildren_Item `json:"elseChildren,omitempty"`
+	ElseChildren *[]IfBlock_ElseChildren_Item `json:"elseChildren,omitempty"`
 
 	// Id Unique identifier for the block (auto-generated if not provided)
 	Id *string `json:"id"`
@@ -4000,46 +4235,17 @@ type IfBlockInput struct {
 	StepDescription *string `json:"step_description"`
 
 	// ThenChildren Blocks to execute if condition is true
-	ThenChildren *[]IfBlockInput_ThenChildren_Item `json:"thenChildren,omitempty"`
-	Type         string                            `json:"type"`
+	ThenChildren *[]IfBlock_ThenChildren_Item `json:"thenChildren,omitempty"`
+	Type         string                       `json:"type"`
 }
 
-// IfBlockInput_ElseChildren_Item defines model for IfBlock-Input.elseChildren.Item.
-type IfBlockInput_ElseChildren_Item struct {
+// IfBlock_ElseChildren_Item defines model for IfBlock.elseChildren.Item.
+type IfBlock_ElseChildren_Item struct {
 	union json.RawMessage
 }
 
-// IfBlockInput_ThenChildren_Item defines model for IfBlock-Input.thenChildren.Item.
-type IfBlockInput_ThenChildren_Item struct {
-	union json.RawMessage
-}
-
-// IfBlockOutput Block for conditional logic.
-type IfBlockOutput struct {
-	// Condition Condition to evaluate (alternative to 'step_description')
-	Condition *string `json:"condition"`
-
-	// ElseChildren Blocks to execute if condition is false
-	ElseChildren *[]IfBlockOutput_ElseChildren_Item `json:"elseChildren,omitempty"`
-
-	// Id Unique identifier for the block (auto-generated if not provided)
-	Id *string `json:"id"`
-
-	// StepDescription Condition to evaluate (alternative to 'condition')
-	StepDescription *string `json:"step_description"`
-
-	// ThenChildren Blocks to execute if condition is true
-	ThenChildren *[]IfBlockOutput_ThenChildren_Item `json:"thenChildren,omitempty"`
-	Type         string                             `json:"type"`
-}
-
-// IfBlockOutput_ElseChildren_Item defines model for IfBlock-Output.elseChildren.Item.
-type IfBlockOutput_ElseChildren_Item struct {
-	union json.RawMessage
-}
-
-// IfBlockOutput_ThenChildren_Item defines model for IfBlock-Output.thenChildren.Item.
-type IfBlockOutput_ThenChildren_Item struct {
+// IfBlock_ThenChildren_Item defines model for IfBlock.thenChildren.Item.
+type IfBlock_ThenChildren_Item struct {
 	union json.RawMessage
 }
 
@@ -4091,20 +4297,20 @@ type InternalSlackChannelsResponse struct {
 
 // InternalSlackNotificationRule An internal Slack notification rule.
 type InternalSlackNotificationRule struct {
-	ChannelId       string                `json:"channel_id"`
-	ChannelName     *string               `json:"channel_name"`
-	CreatedAt       time.Time             `json:"created_at"`
-	CreatedBy       *openapi_types.UUID   `json:"created_by"`
-	Enabled         *bool                 `json:"enabled,omitempty"`
-	Id              openapi_types.UUID    `json:"id"`
-	NotifyOnFailure *bool                 `json:"notify_on_failure,omitempty"`
-	NotifyOnSuccess *bool                 `json:"notify_on_success,omitempty"`
-	NotifyOnTimeout *bool                 `json:"notify_on_timeout,omitempty"`
-	OrgId           *openapi_types.UUID   `json:"org_id"`
-	OrgName         *string               `json:"org_name"`
-	UpdatedAt       time.Time             `json:"updated_at"`
-	WorkflowIds     *[]openapi_types.UUID `json:"workflow_ids,omitempty"`
-	Workflows       *[]WorkflowInfoOutput `json:"workflows,omitempty"`
+	ChannelId       string                                                `json:"channel_id"`
+	ChannelName     *string                                               `json:"channel_name"`
+	CreatedAt       time.Time                                             `json:"created_at"`
+	CreatedBy       *openapi_types.UUID                                   `json:"created_by"`
+	Enabled         *bool                                                 `json:"enabled,omitempty"`
+	Id              openapi_types.UUID                                    `json:"id"`
+	NotifyOnFailure *bool                                                 `json:"notify_on_failure,omitempty"`
+	NotifyOnSuccess *bool                                                 `json:"notify_on_success,omitempty"`
+	NotifyOnTimeout *bool                                                 `json:"notify_on_timeout,omitempty"`
+	OrgId           *openapi_types.UUID                                   `json:"org_id"`
+	OrgName         *string                                               `json:"org_name"`
+	UpdatedAt       time.Time                                             `json:"updated_at"`
+	WorkflowIds     *[]openapi_types.UUID                                 `json:"workflow_ids,omitempty"`
+	Workflows       *[]AppRoutesAdminRoutesAdminInternalSlackWorkflowInfo `json:"workflows,omitempty"`
 }
 
 // InternalSlackNotificationRulesResponse Response for listing internal notification rules.
@@ -4811,11 +5017,11 @@ type OrgRepository struct {
 	Status      string `json:"status"`
 }
 
-// OrgTestMonitorItem Single test item for org-wide monitoring.
+// OrgTestMonitorItemInput Single test item for org-wide monitoring.
 //
 // Uses 'id' instead of 'task_id' as the primary identifier.
 // Status uses SessionStatus directly (queued, starting, running, etc.).
-type OrgTestMonitorItem struct {
+type OrgTestMonitorItemInput struct {
 	AppPackage *string `json:"app_package"`
 
 	// CanCancel Whether current user can cancel this test
@@ -4829,12 +5035,9 @@ type OrgTestMonitorItem struct {
 	EstimatedDurationSeconds *int    `json:"estimated_duration_seconds"`
 
 	// Id Execution ID
-	Id openapi_types.UUID `json:"id"`
-
-	// ParentWorkflowTaskId Alias for workflow_execution_id, for backwards compatibility.
-	ParentWorkflowTaskId *string `json:"parent_workflow_task_id"`
-	Platform             *string `json:"platform"`
-	Progress             float32 `json:"progress"`
+	Id       openapi_types.UUID `json:"id"`
+	Platform *string            `json:"platform"`
+	Progress float32            `json:"progress"`
 
 	// Source Execution source: ui, cli, api, ci_cd, or workflow
 	Source    *string    `json:"source,omitempty"`
@@ -4848,14 +5051,11 @@ type OrgTestMonitorItem struct {
 	// Status flow:
 	//     QUEUED → STARTING → RUNNING → STOPPING → COMPLETED/FAILED/TIMEOUT/CANCELLED
 	//                                 ↘ VERIFYING → STOPPING
-	Status         SessionStatus `json:"status"`
-	StepsCompleted *int          `json:"steps_completed,omitempty"`
-
-	// TaskId Alias for id, for backwards compatibility with older clients.
-	TaskId     *string            `json:"task_id,omitempty"`
-	TestId     openapi_types.UUID `json:"test_id"`
-	TestName   string             `json:"test_name"`
-	TotalSteps *int               `json:"total_steps,omitempty"`
+	Status         SessionStatus      `json:"status"`
+	StepsCompleted *int               `json:"steps_completed,omitempty"`
+	TestId         openapi_types.UUID `json:"test_id"`
+	TestName       string             `json:"test_name"`
+	TotalSteps     *int               `json:"total_steps,omitempty"`
 
 	// TraceId OpenTelemetry trace ID (32 hex chars, no dashes) for Grafana correlation
 	TraceId   *string    `json:"trace_id"`
@@ -6246,7 +6446,7 @@ type StartDeviceInfo struct {
 	SessionId                    *openapi_types.UUID `json:"session_id"`
 	StartupSessionStartMonotonic *float32            `json:"startup_session_start_monotonic"`
 	TestId                       *openapi_types.UUID `json:"test_id"`
-	TestInfo                     *TestInput          `json:"test_info,omitempty"`
+	TestInfo                     *Test               `json:"test_info,omitempty"`
 	UserId                       *openapi_types.UUID `json:"user_id"`
 
 	// Viewport Model for viewport dimensions used in browser sessions.
@@ -6640,8 +6840,8 @@ type TaskReportResponse_ReportMetadata struct {
 	union json.RawMessage
 }
 
-// TestInput defines model for Test-Input.
-type TestInput struct {
+// Test defines model for Test.
+type Test struct {
 	AppId      *openapi_types.UUID `json:"app_id"`
 	AppLink    *string             `json:"app_link"`
 	AppPackage *string             `json:"app_package"`
@@ -6699,7 +6899,7 @@ type TestInput struct {
 
 	// Tags Tags associated with this test for categorization and filtering
 	Tags   *[]Tag              `json:"tags"`
-	Tasks  *TestInput_Tasks    `json:"tasks,omitempty"`
+	Tasks  *Test_Tasks         `json:"tasks,omitempty"`
 	UserId *openapi_types.UUID `json:"user_id"`
 
 	// Version Current version number for optimistic locking. Increments on each save.
@@ -6708,109 +6908,22 @@ type TestInput struct {
 	AdditionalProperties map[string]interface{}  `json:"-"`
 }
 
-// TestInputTasks0 defines model for .
-type TestInputTasks0 = []TestInput_Tasks_0_Item
+// TestTasks0 defines model for .
+type TestTasks0 = []Test_Tasks_0_Item
 
-// TestInput_Tasks_0_Item defines model for TestInput.Tasks.0.Item.
-type TestInput_Tasks_0_Item struct {
+// Test_Tasks_0_Item defines model for Test.Tasks.0.Item.
+type Test_Tasks_0_Item struct {
 	union json.RawMessage
 }
 
-// TestInputTasks1 defines model for .
-type TestInputTasks1 = []map[string]interface{}
+// TestTasks1 defines model for .
+type TestTasks1 = []map[string]interface{}
 
-// TestInputTasks2 defines model for .
-type TestInputTasks2 = []TaskMetadata
+// TestTasks2 defines model for .
+type TestTasks2 = []TaskMetadata
 
-// TestInput_Tasks defines model for TestInput.Tasks.
-type TestInput_Tasks struct {
-	union json.RawMessage
-}
-
-// TestOutput defines model for Test-Output.
-type TestOutput struct {
-	AppId      *openapi_types.UUID `json:"app_id"`
-	AppLink    *string             `json:"app_link"`
-	AppPackage *string             `json:"app_package"`
-	BackendUrl *string             `json:"backend_url"`
-
-	// CachedElements Stores cached action elements for a test, indexed by node_id.
-	//
-	// Attributes:
-	//     test_id (str): The unique identifier for the test.
-	//     cached_elements (Dict[str, CachedActionElement]): Dictionary of cached action elements keyed by node_id.
-	CachedElements *CachedActionStore `json:"cached_elements,omitempty"`
-	DeviceLocal    *bool              `json:"device_local"`
-
-	// ExpectedVersion Expected version for optimistic locking. If provided and doesn't match current version, update will fail with 409 Conflict.
-	ExpectedVersion *int                `json:"expected_version"`
-	Flowdescription *string             `json:"flowdescription"`
-	GetDownloads    *bool               `json:"get_downloads"`
-	Id              *openapi_types.UUID `json:"id"`
-
-	// LastDuration Duration of the most recent execution in seconds
-	LastDuration *float32 `json:"last_duration"`
-
-	// LastExecutionId Execution ID of the most recent execution for deep-linking to report (was last_task_id)
-	LastExecutionId *openapi_types.UUID `json:"last_execution_id"`
-
-	// LastExecutionTime ISO timestamp of the most recent execution completion
-	LastExecutionTime *string `json:"last_execution_time"`
-
-	// LastModifiedBy UUID of the user who last modified this test.
-	LastModifiedBy *openapi_types.UUID `json:"last_modified_by"`
-
-	// LastStatus Status of the most recent execution (success, failure, timeout, cancelled, running, queued, setup, verifying, or None)
-	LastStatus   *string `json:"last_status"`
-	Link         *string `json:"link"`
-	LlmModelName *string `json:"llm_model_name"`
-
-	// MobileTargets Saved device model + runtime targets for this test
-	MobileTargets *[]MobileTarget `json:"mobile_targets"`
-	Name          *string         `json:"name"`
-
-	// Orientation Device orientation from test_mobile_details ('portrait' or 'landscape')
-	Orientation   *string             `json:"orientation"`
-	Owner         *openapi_types.UUID `json:"owner"`
-	PackageName   *string             `json:"package_name"`
-	PinnedVersion *string             `json:"pinned_version"`
-	Platform      *string             `json:"platform,omitempty"`
-
-	// ResolvedBuild Normalized representation of a resolved build artifact.
-	ResolvedBuild *ResolvedBuild `json:"resolved_build,omitempty"`
-	Retries       *int           `json:"retries"`
-
-	// RunConfig Complete configuration for a test run.
-	RunConfig *TestRunConfig      `json:"run_config,omitempty"`
-	RunId     *openapi_types.UUID `json:"run_id"`
-
-	// Tags Tags associated with this test for categorization and filtering
-	Tags   *[]Tag              `json:"tags"`
-	Tasks  *TestOutput_Tasks   `json:"tasks,omitempty"`
-	UserId *openapi_types.UUID `json:"user_id"`
-
-	// Version Current version number for optimistic locking. Increments on each save.
-	Version              *int                    `json:"version"`
-	Viewport             *map[string]interface{} `json:"viewport"`
-	AdditionalProperties map[string]interface{}  `json:"-"`
-}
-
-// TestOutputTasks0 defines model for .
-type TestOutputTasks0 = []TestOutput_Tasks_0_Item
-
-// TestOutput_Tasks_0_Item defines model for TestOutput.Tasks.0.Item.
-type TestOutput_Tasks_0_Item struct {
-	union json.RawMessage
-}
-
-// TestOutputTasks1 defines model for .
-type TestOutputTasks1 = []map[string]interface{}
-
-// TestOutputTasks2 defines model for .
-type TestOutputTasks2 = []TaskMetadata
-
-// TestOutput_Tasks defines model for TestOutput.Tasks.
-type TestOutput_Tasks struct {
+// Test_Tasks defines model for Test.Tasks.
+type Test_Tasks struct {
 	union json.RawMessage
 }
 
@@ -7123,7 +7236,7 @@ type TestListResponse struct {
 	StatusCounts *TestStatusCounts `json:"status_counts,omitempty"`
 
 	// Tests List of tests
-	Tests []TestOutput `json:"tests"`
+	Tests []Test `json:"tests"`
 
 	// TotalCount Total number of tests across all pages
 	TotalCount *int `json:"total_count,omitempty"`
@@ -8056,10 +8169,10 @@ type WeeklyMetrics struct {
 	TotalExecutions *float32 `json:"total_executions,omitempty"`
 }
 
-// WhileBlockInput Block for loop logic.
-type WhileBlockInput struct {
+// WhileBlock Block for loop logic.
+type WhileBlock struct {
 	// Children Blocks to execute in the loop
-	Children *[]WhileBlockInput_Children_Item `json:"children,omitempty"`
+	Children *[]WhileBlock_Children_Item `json:"children,omitempty"`
 
 	// Condition Condition to evaluate for loop continuation (alternative to 'step_description')
 	Condition *string `json:"condition"`
@@ -8072,29 +8185,8 @@ type WhileBlockInput struct {
 	Type            string  `json:"type"`
 }
 
-// WhileBlockInput_Children_Item defines model for WhileBlock-Input.children.Item.
-type WhileBlockInput_Children_Item struct {
-	union json.RawMessage
-}
-
-// WhileBlockOutput Block for loop logic.
-type WhileBlockOutput struct {
-	// Children Blocks to execute in the loop
-	Children *[]WhileBlockOutput_Children_Item `json:"children,omitempty"`
-
-	// Condition Condition to evaluate for loop continuation (alternative to 'step_description')
-	Condition *string `json:"condition"`
-
-	// Id Unique identifier for the block (auto-generated if not provided)
-	Id *string `json:"id"`
-
-	// StepDescription Condition to evaluate for loop continuation (alternative to 'condition')
-	StepDescription *string `json:"step_description"`
-	Type            string  `json:"type"`
-}
-
-// WhileBlockOutput_Children_Item defines model for WhileBlock-Output.children.Item.
-type WhileBlockOutput_Children_Item struct {
+// WhileBlock_Children_Item defines model for WhileBlock.children.Item.
+type WhileBlock_Children_Item struct {
 	union json.RawMessage
 }
 
@@ -8342,9 +8434,6 @@ type WorkflowExecutionsBaseSchema struct {
 	Status    string     `json:"status"`
 	Success   *bool      `json:"success"`
 
-	// TaskId Alias for id, for backwards compatibility with older clients.
-	TaskId *string `json:"task_id,omitempty"`
-
 	// TestExecutions Child test executions with session data for efficient operations
 	TestExecutions *[]TestExecutionSummary `json:"test_executions,omitempty"`
 	TotalTests     *int                    `json:"total_tests"`
@@ -8409,41 +8498,6 @@ type WorkflowExecutionsUpdate_WorkflowId struct {
 type WorkflowForTestItem struct {
 	Id   openapi_types.UUID `json:"id"`
 	Name string             `json:"name"`
-}
-
-// WorkflowInfoInput Request model for triggering workflow execution.
-//
-// Attributes:
-//
-//	workflow_id: UUID of the workflow to execute.
-//	run_config: Optional run configuration override for workflow-triggered tests.
-//	build_config: Optional build configuration override for this execution.
-//	override_build_config: When True with build_config, overrides test builds.
-type WorkflowInfoInput struct {
-	// BuildConfig Workflow-level app configuration for iOS and Android.
-	//
-	// When set on a workflow with override_build_config=True, these apps
-	// override individual test app configurations for matching platforms.
-	//
-	// Attributes:
-	//     ios_app: Optional iOS app override configuration.
-	//     android_app: Optional Android app override configuration.
-	BuildConfig *WorkflowAppConfig `json:"build_config,omitempty"`
-
-	// OverrideBuildConfig When True, build_config overrides individual test build configurations
-	OverrideBuildConfig *bool `json:"override_build_config,omitempty"`
-
-	// RunConfig Complete configuration for a test run.
-	RunConfig  *TestRunConfig     `json:"run_config,omitempty"`
-	WorkflowId openapi_types.UUID `json:"workflow_id"`
-}
-
-// WorkflowInfoOutput Basic workflow info for rule display.
-type WorkflowInfoOutput struct {
-	Id      openapi_types.UUID  `json:"id"`
-	Name    string              `json:"name"`
-	OrgId   *openapi_types.UUID `json:"org_id"`
-	OrgName *string             `json:"org_name"`
 }
 
 // WorkflowLastExecution Model for workflow last execution data.
@@ -8717,6 +8771,14 @@ type YamlToBlocksRequest struct {
 	YamlContent string `json:"yaml_content"`
 }
 
+// AppRoutesAdminRoutesAdminInternalSlackWorkflowInfo Basic workflow info for rule display.
+type AppRoutesAdminRoutesAdminInternalSlackWorkflowInfo struct {
+	Id      openapi_types.UUID  `json:"id"`
+	Name    string              `json:"name"`
+	OrgId   *openapi_types.UUID `json:"org_id"`
+	OrgName *string             `json:"org_name"`
+}
+
 // AppRoutesExecutionRoutesBillingXptSessionHistoryItem defines model for app__routes__execution_routes__billing_xpt__SessionHistoryItem.
 type AppRoutesExecutionRoutesBillingXptSessionHistoryItem struct {
 	BilledAt         string  `json:"billed_at"`
@@ -8747,6 +8809,10 @@ type AppRoutesExecutionRoutesBillingXptSessionHistoryResponse struct {
 
 // AppRoutesExecutionRoutesDeviceSessionsXptSessionHistoryItem Single row in the device session history listing.
 type AppRoutesExecutionRoutesDeviceSessionsXptSessionHistoryItem struct {
+	AppId               *string                 `json:"app_id"`
+	AppName             *string                 `json:"app_name"`
+	BuildId             *string                 `json:"build_id"`
+	BuildVersion        *string                 `json:"build_version"`
 	CreatedAt           *string                 `json:"created_at"`
 	DeviceModel         *string                 `json:"device_model"`
 	DurationSeconds     *float32                `json:"duration_seconds"`
@@ -8798,6 +8864,33 @@ type AppRoutesWorkflowRoutesWorkflowShareXptStepMetadata struct {
 	EndTime     float32 `json:"end_time"`
 	Index       int     `json:"index"`
 	StartTime   float32 `json:"start_time"`
+}
+
+// CognisimSchemasSchemasDeviceSchemaWorkflowInfo Request model for triggering workflow execution.
+//
+// Attributes:
+//
+//	workflow_id: UUID of the workflow to execute.
+//	run_config: Optional run configuration override for workflow-triggered tests.
+//	build_config: Optional build configuration override for this execution.
+//	override_build_config: When True with build_config, overrides test builds.
+type CognisimSchemasSchemasDeviceSchemaWorkflowInfo struct {
+	// BuildConfig Workflow-level app configuration for iOS and Android.
+	//
+	// When set on a workflow with override_build_config=True, these apps
+	// override individual test app configurations for matching platforms.
+	//
+	// Attributes:
+	//     ios_app: Optional iOS app override configuration.
+	//     android_app: Optional Android app override configuration.
+	BuildConfig *WorkflowAppConfig `json:"build_config,omitempty"`
+
+	// OverrideBuildConfig When True, build_config overrides individual test build configurations
+	OverrideBuildConfig *bool `json:"override_build_config,omitempty"`
+
+	// RunConfig Complete configuration for a test run.
+	RunConfig  *TestRunConfig     `json:"run_config,omitempty"`
+	WorkflowId openapi_types.UUID `json:"workflow_id"`
 }
 
 // GetActiveWorkflowsApiV1AdminDashboardActiveWorkflowsGetParams defines parameters for GetActiveWorkflowsApiV1AdminDashboardActiveWorkflowsGet.
@@ -9176,6 +9269,204 @@ type GetTestMatrixApiV1AppsAppIdTestMatrixGetParams struct {
 type GetAppWorkspaceApiV1AppsAppIdWorkspaceGetParams struct {
 	// TrendDays Trend window in days
 	TrendDays *int `form:"trend_days,omitempty" json:"trend_days,omitempty"`
+}
+
+// CompareAtlasV2EntitiesApiV1AtlasV2AppsAppIdCompareGetParams defines parameters for CompareAtlasV2EntitiesApiV1AtlasV2AppsAppIdCompareGet.
+type CompareAtlasV2EntitiesApiV1AtlasV2AppsAppIdCompareGetParams struct {
+	LeftEntityId    string  `form:"left_entity_id" json:"left_entity_id"`
+	RightEntityId   string  `form:"right_entity_id" json:"right_entity_id"`
+	BuildId         *string `form:"build_id,omitempty" json:"build_id,omitempty"`
+	ReportId        *string `form:"report_id,omitempty" json:"report_id,omitempty"`
+	TestId          *string `form:"test_id,omitempty" json:"test_id,omitempty"`
+	SourceKind      *string `form:"source_kind,omitempty" json:"source_kind,omitempty"`
+	FromTime        *string `form:"from_time,omitempty" json:"from_time,omitempty"`
+	ToTime          *string `form:"to_time,omitempty" json:"to_time,omitempty"`
+	SurfaceScope    *string `form:"surface_scope,omitempty" json:"surface_scope,omitempty"`
+	Visibility      *string `form:"visibility,omitempty" json:"visibility,omitempty"`
+	IncludeVariants *bool   `form:"include_variants,omitempty" json:"include_variants,omitempty"`
+	Limit           *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// GetAtlasV2EntityApiV1AtlasV2AppsAppIdEntitiesEntityIdGetParams defines parameters for GetAtlasV2EntityApiV1AtlasV2AppsAppIdEntitiesEntityIdGet.
+type GetAtlasV2EntityApiV1AtlasV2AppsAppIdEntitiesEntityIdGetParams struct {
+	BuildId         *string `form:"build_id,omitempty" json:"build_id,omitempty"`
+	ReportId        *string `form:"report_id,omitempty" json:"report_id,omitempty"`
+	TestId          *string `form:"test_id,omitempty" json:"test_id,omitempty"`
+	SourceKind      *string `form:"source_kind,omitempty" json:"source_kind,omitempty"`
+	FromTime        *string `form:"from_time,omitempty" json:"from_time,omitempty"`
+	ToTime          *string `form:"to_time,omitempty" json:"to_time,omitempty"`
+	SurfaceScope    *string `form:"surface_scope,omitempty" json:"surface_scope,omitempty"`
+	Visibility      *string `form:"visibility,omitempty" json:"visibility,omitempty"`
+	IncludeVariants *bool   `form:"include_variants,omitempty" json:"include_variants,omitempty"`
+	Limit           *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// GetAtlasV2EntityCandidatesApiV1AtlasV2AppsAppIdEntitiesEntityIdCandidatesGetParams defines parameters for GetAtlasV2EntityCandidatesApiV1AtlasV2AppsAppIdEntitiesEntityIdCandidatesGet.
+type GetAtlasV2EntityCandidatesApiV1AtlasV2AppsAppIdEntitiesEntityIdCandidatesGetParams struct {
+	BuildId         *string `form:"build_id,omitempty" json:"build_id,omitempty"`
+	ReportId        *string `form:"report_id,omitempty" json:"report_id,omitempty"`
+	TestId          *string `form:"test_id,omitempty" json:"test_id,omitempty"`
+	SourceKind      *string `form:"source_kind,omitempty" json:"source_kind,omitempty"`
+	FromTime        *string `form:"from_time,omitempty" json:"from_time,omitempty"`
+	ToTime          *string `form:"to_time,omitempty" json:"to_time,omitempty"`
+	SurfaceScope    *string `form:"surface_scope,omitempty" json:"surface_scope,omitempty"`
+	Visibility      *string `form:"visibility,omitempty" json:"visibility,omitempty"`
+	IncludeVariants *bool   `form:"include_variants,omitempty" json:"include_variants,omitempty"`
+	Limit           *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// GetAtlasV2EntityNeighborsApiV1AtlasV2AppsAppIdEntitiesEntityIdNeighborsGetParams defines parameters for GetAtlasV2EntityNeighborsApiV1AtlasV2AppsAppIdEntitiesEntityIdNeighborsGet.
+type GetAtlasV2EntityNeighborsApiV1AtlasV2AppsAppIdEntitiesEntityIdNeighborsGetParams struct {
+	Direction       *string `form:"direction,omitempty" json:"direction,omitempty"`
+	BuildId         *string `form:"build_id,omitempty" json:"build_id,omitempty"`
+	ReportId        *string `form:"report_id,omitempty" json:"report_id,omitempty"`
+	TestId          *string `form:"test_id,omitempty" json:"test_id,omitempty"`
+	SourceKind      *string `form:"source_kind,omitempty" json:"source_kind,omitempty"`
+	FromTime        *string `form:"from_time,omitempty" json:"from_time,omitempty"`
+	ToTime          *string `form:"to_time,omitempty" json:"to_time,omitempty"`
+	SurfaceScope    *string `form:"surface_scope,omitempty" json:"surface_scope,omitempty"`
+	Visibility      *string `form:"visibility,omitempty" json:"visibility,omitempty"`
+	IncludeVariants *bool   `form:"include_variants,omitempty" json:"include_variants,omitempty"`
+	Limit           *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// GetAtlasV2EntityObservationsApiV1AtlasV2AppsAppIdEntitiesEntityIdObservationsGetParams defines parameters for GetAtlasV2EntityObservationsApiV1AtlasV2AppsAppIdEntitiesEntityIdObservationsGet.
+type GetAtlasV2EntityObservationsApiV1AtlasV2AppsAppIdEntitiesEntityIdObservationsGetParams struct {
+	BuildId         *string `form:"build_id,omitempty" json:"build_id,omitempty"`
+	ReportId        *string `form:"report_id,omitempty" json:"report_id,omitempty"`
+	TestId          *string `form:"test_id,omitempty" json:"test_id,omitempty"`
+	SourceKind      *string `form:"source_kind,omitempty" json:"source_kind,omitempty"`
+	FromTime        *string `form:"from_time,omitempty" json:"from_time,omitempty"`
+	ToTime          *string `form:"to_time,omitempty" json:"to_time,omitempty"`
+	SurfaceScope    *string `form:"surface_scope,omitempty" json:"surface_scope,omitempty"`
+	Visibility      *string `form:"visibility,omitempty" json:"visibility,omitempty"`
+	IncludeVariants *bool   `form:"include_variants,omitempty" json:"include_variants,omitempty"`
+	Limit           *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// GetAtlasV2FlowsApiV1AtlasV2AppsAppIdFlowsGetParams defines parameters for GetAtlasV2FlowsApiV1AtlasV2AppsAppIdFlowsGet.
+type GetAtlasV2FlowsApiV1AtlasV2AppsAppIdFlowsGetParams struct {
+	BuildId         *string `form:"build_id,omitempty" json:"build_id,omitempty"`
+	ReportId        *string `form:"report_id,omitempty" json:"report_id,omitempty"`
+	TestId          *string `form:"test_id,omitempty" json:"test_id,omitempty"`
+	SourceKind      *string `form:"source_kind,omitempty" json:"source_kind,omitempty"`
+	FromTime        *string `form:"from_time,omitempty" json:"from_time,omitempty"`
+	ToTime          *string `form:"to_time,omitempty" json:"to_time,omitempty"`
+	SurfaceScope    *string `form:"surface_scope,omitempty" json:"surface_scope,omitempty"`
+	Visibility      *string `form:"visibility,omitempty" json:"visibility,omitempty"`
+	IncludeVariants *bool   `form:"include_variants,omitempty" json:"include_variants,omitempty"`
+	Limit           *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// GetAtlasV2GraphApiV1AtlasV2AppsAppIdGraphGetParams defines parameters for GetAtlasV2GraphApiV1AtlasV2AppsAppIdGraphGet.
+type GetAtlasV2GraphApiV1AtlasV2AppsAppIdGraphGetParams struct {
+	BuildId         *string `form:"build_id,omitempty" json:"build_id,omitempty"`
+	ReportId        *string `form:"report_id,omitempty" json:"report_id,omitempty"`
+	TestId          *string `form:"test_id,omitempty" json:"test_id,omitempty"`
+	SourceKind      *string `form:"source_kind,omitempty" json:"source_kind,omitempty"`
+	FromTime        *string `form:"from_time,omitempty" json:"from_time,omitempty"`
+	ToTime          *string `form:"to_time,omitempty" json:"to_time,omitempty"`
+	SurfaceScope    *string `form:"surface_scope,omitempty" json:"surface_scope,omitempty"`
+	Visibility      *string `form:"visibility,omitempty" json:"visibility,omitempty"`
+	IncludeVariants *bool   `form:"include_variants,omitempty" json:"include_variants,omitempty"`
+	Limit           *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// GetAtlasV2ObservationApiV1AtlasV2AppsAppIdObservationsObservationIdGetParams defines parameters for GetAtlasV2ObservationApiV1AtlasV2AppsAppIdObservationsObservationIdGet.
+type GetAtlasV2ObservationApiV1AtlasV2AppsAppIdObservationsObservationIdGetParams struct {
+	BuildId         *string `form:"build_id,omitempty" json:"build_id,omitempty"`
+	ReportId        *string `form:"report_id,omitempty" json:"report_id,omitempty"`
+	TestId          *string `form:"test_id,omitempty" json:"test_id,omitempty"`
+	SourceKind      *string `form:"source_kind,omitempty" json:"source_kind,omitempty"`
+	FromTime        *string `form:"from_time,omitempty" json:"from_time,omitempty"`
+	ToTime          *string `form:"to_time,omitempty" json:"to_time,omitempty"`
+	SurfaceScope    *string `form:"surface_scope,omitempty" json:"surface_scope,omitempty"`
+	Visibility      *string `form:"visibility,omitempty" json:"visibility,omitempty"`
+	IncludeVariants *bool   `form:"include_variants,omitempty" json:"include_variants,omitempty"`
+	Limit           *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// GetAtlasV2OverviewApiV1AtlasV2AppsAppIdOverviewGetParams defines parameters for GetAtlasV2OverviewApiV1AtlasV2AppsAppIdOverviewGet.
+type GetAtlasV2OverviewApiV1AtlasV2AppsAppIdOverviewGetParams struct {
+	BuildId         *string `form:"build_id,omitempty" json:"build_id,omitempty"`
+	ReportId        *string `form:"report_id,omitempty" json:"report_id,omitempty"`
+	TestId          *string `form:"test_id,omitempty" json:"test_id,omitempty"`
+	SourceKind      *string `form:"source_kind,omitempty" json:"source_kind,omitempty"`
+	FromTime        *string `form:"from_time,omitempty" json:"from_time,omitempty"`
+	ToTime          *string `form:"to_time,omitempty" json:"to_time,omitempty"`
+	SurfaceScope    *string `form:"surface_scope,omitempty" json:"surface_scope,omitempty"`
+	Visibility      *string `form:"visibility,omitempty" json:"visibility,omitempty"`
+	IncludeVariants *bool   `form:"include_variants,omitempty" json:"include_variants,omitempty"`
+	Limit           *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// SearchAtlasV2ApiV1AtlasV2AppsAppIdSearchGetParams defines parameters for SearchAtlasV2ApiV1AtlasV2AppsAppIdSearchGet.
+type SearchAtlasV2ApiV1AtlasV2AppsAppIdSearchGetParams struct {
+	Q               string  `form:"q" json:"q"`
+	BuildId         *string `form:"build_id,omitempty" json:"build_id,omitempty"`
+	ReportId        *string `form:"report_id,omitempty" json:"report_id,omitempty"`
+	TestId          *string `form:"test_id,omitempty" json:"test_id,omitempty"`
+	SourceKind      *string `form:"source_kind,omitempty" json:"source_kind,omitempty"`
+	FromTime        *string `form:"from_time,omitempty" json:"from_time,omitempty"`
+	ToTime          *string `form:"to_time,omitempty" json:"to_time,omitempty"`
+	SurfaceScope    *string `form:"surface_scope,omitempty" json:"surface_scope,omitempty"`
+	Visibility      *string `form:"visibility,omitempty" json:"visibility,omitempty"`
+	IncludeVariants *bool   `form:"include_variants,omitempty" json:"include_variants,omitempty"`
+	Limit           *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// GetAtlasV2StructureApiV1AtlasV2AppsAppIdStructureGetParams defines parameters for GetAtlasV2StructureApiV1AtlasV2AppsAppIdStructureGet.
+type GetAtlasV2StructureApiV1AtlasV2AppsAppIdStructureGetParams struct {
+	BuildId         *string `form:"build_id,omitempty" json:"build_id,omitempty"`
+	ReportId        *string `form:"report_id,omitempty" json:"report_id,omitempty"`
+	TestId          *string `form:"test_id,omitempty" json:"test_id,omitempty"`
+	SourceKind      *string `form:"source_kind,omitempty" json:"source_kind,omitempty"`
+	FromTime        *string `form:"from_time,omitempty" json:"from_time,omitempty"`
+	ToTime          *string `form:"to_time,omitempty" json:"to_time,omitempty"`
+	SurfaceScope    *string `form:"surface_scope,omitempty" json:"surface_scope,omitempty"`
+	Visibility      *string `form:"visibility,omitempty" json:"visibility,omitempty"`
+	IncludeVariants *bool   `form:"include_variants,omitempty" json:"include_variants,omitempty"`
+	Limit           *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// RunAtlasV2BackfillScopeApiV1AtlasV2BackfillJobsJobIdRunPostParams defines parameters for RunAtlasV2BackfillScopeApiV1AtlasV2BackfillJobsJobIdRunPost.
+type RunAtlasV2BackfillScopeApiV1AtlasV2BackfillJobsJobIdRunPostParams struct {
+	XServiceKey *string `json:"x-service-key,omitempty"`
+}
+
+// GetAtlasV2IndexApiV1AtlasV2IndexGetParams defines parameters for GetAtlasV2IndexApiV1AtlasV2IndexGet.
+type GetAtlasV2IndexApiV1AtlasV2IndexGetParams struct {
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// CompleteAtlasV2LayerJobApiV1AtlasV2LayerJobsJobIdCompletePostParams defines parameters for CompleteAtlasV2LayerJobApiV1AtlasV2LayerJobsJobIdCompletePost.
+type CompleteAtlasV2LayerJobApiV1AtlasV2LayerJobsJobIdCompletePostParams struct {
+	XServiceKey *string `json:"x-service-key,omitempty"`
+}
+
+// InsertAtlasV2EdgeObservationsApiV1AtlasV2LayerJobsJobIdEdgesPostParams defines parameters for InsertAtlasV2EdgeObservationsApiV1AtlasV2LayerJobsJobIdEdgesPost.
+type InsertAtlasV2EdgeObservationsApiV1AtlasV2LayerJobsJobIdEdgesPostParams struct {
+	XServiceKey *string `json:"x-service-key,omitempty"`
+}
+
+// LayerAtlasV2ObservationApiV1AtlasV2LayerJobsJobIdObservationsPostParams defines parameters for LayerAtlasV2ObservationApiV1AtlasV2LayerJobsJobIdObservationsPost.
+type LayerAtlasV2ObservationApiV1AtlasV2LayerJobsJobIdObservationsPostParams struct {
+	XServiceKey *string `json:"x-service-key,omitempty"`
+}
+
+// GetAtlasV2LayerSourceApiV1AtlasV2LayerJobsJobIdSourceGetParams defines parameters for GetAtlasV2LayerSourceApiV1AtlasV2LayerJobsJobIdSourceGet.
+type GetAtlasV2LayerSourceApiV1AtlasV2LayerJobsJobIdSourceGetParams struct {
+	XServiceKey *string `json:"x-service-key,omitempty"`
+}
+
+// UpdateAtlasV2LayerStatusApiV1AtlasV2LayerJobsJobIdStatusPostParams defines parameters for UpdateAtlasV2LayerStatusApiV1AtlasV2LayerJobsJobIdStatusPost.
+type UpdateAtlasV2LayerStatusApiV1AtlasV2LayerJobsJobIdStatusPostParams struct {
+	XServiceKey *string `json:"x-service-key,omitempty"`
+}
+
+// ApplyAtlasV2VlmDecisionApiV1AtlasV2LayerJobsJobIdVlmDecisionPostParams defines parameters for ApplyAtlasV2VlmDecisionApiV1AtlasV2LayerJobsJobIdVlmDecisionPost.
+type ApplyAtlasV2VlmDecisionApiV1AtlasV2LayerJobsJobIdVlmDecisionPostParams struct {
+	XServiceKey *string `json:"x-service-key,omitempty"`
 }
 
 // GetUserTestsWithDetailsEndpointApiV1EntityUsersGetUserTestsWithDetailsGetParams defines parameters for GetUserTestsWithDetailsEndpointApiV1EntityUsersGetUserTestsWithDetailsGet.
@@ -9747,6 +10038,27 @@ type CreateBuildFromUrlApiV1AppsAppIdBuildsFromUrlPostJSONRequestBody = BuildFro
 // StreamUploadBuildApiV1AppsAppIdBuildsStreamUploadPostMultipartRequestBody defines body for StreamUploadBuildApiV1AppsAppIdBuildsStreamUploadPost for multipart/form-data ContentType.
 type StreamUploadBuildApiV1AppsAppIdBuildsStreamUploadPostMultipartRequestBody = BodyStreamUploadBuildApiV1AppsAppIdBuildsStreamUploadPost
 
+// StartAtlasV2BackfillScopeApiV1AtlasV2BackfillScopePostJSONRequestBody defines body for StartAtlasV2BackfillScopeApiV1AtlasV2BackfillScopePost for application/json ContentType.
+type StartAtlasV2BackfillScopeApiV1AtlasV2BackfillScopePostJSONRequestBody = AtlasV2BackfillScopeRequest
+
+// CompleteAtlasV2LayerJobApiV1AtlasV2LayerJobsJobIdCompletePostJSONRequestBody defines body for CompleteAtlasV2LayerJobApiV1AtlasV2LayerJobsJobIdCompletePost for application/json ContentType.
+type CompleteAtlasV2LayerJobApiV1AtlasV2LayerJobsJobIdCompletePostJSONRequestBody = AtlasV2CompleteRequest
+
+// InsertAtlasV2EdgeObservationsApiV1AtlasV2LayerJobsJobIdEdgesPostJSONRequestBody defines body for InsertAtlasV2EdgeObservationsApiV1AtlasV2LayerJobsJobIdEdgesPost for application/json ContentType.
+type InsertAtlasV2EdgeObservationsApiV1AtlasV2LayerJobsJobIdEdgesPostJSONRequestBody = AtlasV2EdgeObservationBatchRequest
+
+// LayerAtlasV2ObservationApiV1AtlasV2LayerJobsJobIdObservationsPostJSONRequestBody defines body for LayerAtlasV2ObservationApiV1AtlasV2LayerJobsJobIdObservationsPost for application/json ContentType.
+type LayerAtlasV2ObservationApiV1AtlasV2LayerJobsJobIdObservationsPostJSONRequestBody = AtlasV2ObservationFeatureInput
+
+// UpdateAtlasV2LayerStatusApiV1AtlasV2LayerJobsJobIdStatusPostJSONRequestBody defines body for UpdateAtlasV2LayerStatusApiV1AtlasV2LayerJobsJobIdStatusPost for application/json ContentType.
+type UpdateAtlasV2LayerStatusApiV1AtlasV2LayerJobsJobIdStatusPostJSONRequestBody = AtlasV2ProgressUpdate
+
+// ApplyAtlasV2VlmDecisionApiV1AtlasV2LayerJobsJobIdVlmDecisionPostJSONRequestBody defines body for ApplyAtlasV2VlmDecisionApiV1AtlasV2LayerJobsJobIdVlmDecisionPost for application/json ContentType.
+type ApplyAtlasV2VlmDecisionApiV1AtlasV2LayerJobsJobIdVlmDecisionPostJSONRequestBody = AtlasV2VLMDecisionRequest
+
+// StartAtlasV2LayerReportApiV1AtlasV2LayerReportPostJSONRequestBody defines body for StartAtlasV2LayerReportApiV1AtlasV2LayerReportPost for application/json ContentType.
+type StartAtlasV2LayerReportApiV1AtlasV2LayerReportPostJSONRequestBody = AtlasV2LayerReportRequest
+
 // DeleteAppBinaryApiV1BinariesTestAppDeleteDeleteJSONRequestBody defines body for DeleteAppBinaryApiV1BinariesTestAppDeleteDelete for application/json ContentType.
 type DeleteAppBinaryApiV1BinariesTestAppDeleteDeleteJSONRequestBody = AppBinaryDeleteRequest
 
@@ -9769,7 +10081,7 @@ type RevokeCliApiKeyEndpointApiV1EntityUsersRevokeCliApiKeyPostJSONRequestBody =
 type ExecuteTestIdAsyncApiV1ExecutionApiExecuteTestIdAsyncPostJSONRequestBody = TaskID
 
 // ExecuteWorkflowIdAsyncApiV1ExecutionApiExecuteWorkflowIdAsyncPostJSONRequestBody defines body for ExecuteWorkflowIdAsyncApiV1ExecutionApiExecuteWorkflowIdAsyncPost for application/json ContentType.
-type ExecuteWorkflowIdAsyncApiV1ExecutionApiExecuteWorkflowIdAsyncPostJSONRequestBody = WorkflowInfoInput
+type ExecuteWorkflowIdAsyncApiV1ExecutionApiExecuteWorkflowIdAsyncPostJSONRequestBody = CognisimSchemasSchemasDeviceSchemaWorkflowInfo
 
 // BillingAttachApiV1ExecutionBillingAttachPostJSONRequestBody defines body for BillingAttachApiV1ExecutionBillingAttachPost for application/json ContentType.
 type BillingAttachApiV1ExecutionBillingAttachPostJSONRequestBody = AttachRequest
@@ -9991,7 +10303,7 @@ type BulkDeleteTestsEndpointApiV1TestsBulkDeletePostJSONRequestBody = BulkDelete
 type BulkDeleteTestExecutionsEndpointApiV1TestsBulkDeleteTestExecutionsPostJSONRequestBody = BulkDeleteTestExecutionsRequest
 
 // CreateTestEndpointApiV1TestsCreatePostJSONRequestBody defines body for CreateTestEndpointApiV1TestsCreatePost for application/json ContentType.
-type CreateTestEndpointApiV1TestsCreatePostJSONRequestBody = TestInput
+type CreateTestEndpointApiV1TestsCreatePostJSONRequestBody = Test
 
 // CreateEnhancedTestExecutionTaskApiV1TestsCreateEnhancedTestExecutionTaskPostJSONRequestBody defines body for CreateEnhancedTestExecutionTaskApiV1TestsCreateEnhancedTestExecutionTaskPost for application/json ContentType.
 type CreateEnhancedTestExecutionTaskApiV1TestsCreateEnhancedTestExecutionTaskPostJSONRequestBody = TestExecutionTasksEnhancedCreate
@@ -10021,7 +10333,7 @@ type SyncTestTagsApiV1TestsTagsTestsTestIdSyncPostJSONRequestBody = SyncTagsRequ
 type UpdateTagApiV1TestsTagsTagIdPatchJSONRequestBody = UpdateTagRequest
 
 // UpdateTestEndpointApiV1TestsUpdateTestIdPutJSONRequestBody defines body for UpdateTestEndpointApiV1TestsUpdateTestIdPut for application/json ContentType.
-type UpdateTestEndpointApiV1TestsUpdateTestIdPutJSONRequestBody = TestInput
+type UpdateTestEndpointApiV1TestsUpdateTestIdPutJSONRequestBody = Test
 
 // UpdateEnhancedTestExecutionTaskApiV1TestsUpdateEnhancedTestExecutionTaskPutJSONRequestBody defines body for UpdateEnhancedTestExecutionTaskApiV1TestsUpdateEnhancedTestExecutionTaskPut for application/json ContentType.
 type UpdateEnhancedTestExecutionTaskApiV1TestsUpdateEnhancedTestExecutionTaskPutJSONRequestBody = TestExecutionTasksEnhancedUpdate
@@ -10130,6 +10442,420 @@ type UpdateWorkflowTimeoutConfigApiV1WorkflowsUpdateTimeoutConfigWorkflowIdPutJS
 
 // UpdateWorkflowTestFailurePolicyApiV1WorkflowsWorkflowTestsWorkflowTestIdPatchJSONRequestBody defines body for UpdateWorkflowTestFailurePolicyApiV1WorkflowsWorkflowTestsWorkflowTestIdPatch for application/json ContentType.
 type UpdateWorkflowTestFailurePolicyApiV1WorkflowsWorkflowTestsWorkflowTestIdPatchJSONRequestBody = UpdateFailurePolicyRequest
+
+// Getter for additional properties for AtlasOCRLine. Returns the specified
+// element and whether it was found
+func (a AtlasOCRLine) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for AtlasOCRLine
+func (a *AtlasOCRLine) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for AtlasOCRLine to handle AdditionalProperties
+func (a *AtlasOCRLine) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["bbox"]; found {
+		err = json.Unmarshal(raw, &a.Bbox)
+		if err != nil {
+			return fmt.Errorf("error reading 'bbox': %w", err)
+		}
+		delete(object, "bbox")
+	}
+
+	if raw, found := object["confidence"]; found {
+		err = json.Unmarshal(raw, &a.Confidence)
+		if err != nil {
+			return fmt.Errorf("error reading 'confidence': %w", err)
+		}
+		delete(object, "confidence")
+	}
+
+	if raw, found := object["text"]; found {
+		err = json.Unmarshal(raw, &a.Text)
+		if err != nil {
+			return fmt.Errorf("error reading 'text': %w", err)
+		}
+		delete(object, "text")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for AtlasOCRLine to handle AdditionalProperties
+func (a AtlasOCRLine) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.Bbox != nil {
+		object["bbox"], err = json.Marshal(a.Bbox)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'bbox': %w", err)
+		}
+	}
+
+	if a.Confidence != nil {
+		object["confidence"], err = json.Marshal(a.Confidence)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'confidence': %w", err)
+		}
+	}
+
+	if a.Text != nil {
+		object["text"], err = json.Marshal(a.Text)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'text': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for AtlasOCRSummary. Returns the specified
+// element and whether it was found
+func (a AtlasOCRSummary) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for AtlasOCRSummary
+func (a *AtlasOCRSummary) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for AtlasOCRSummary to handle AdditionalProperties
+func (a *AtlasOCRSummary) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["error"]; found {
+		err = json.Unmarshal(raw, &a.Error)
+		if err != nil {
+			return fmt.Errorf("error reading 'error': %w", err)
+		}
+		delete(object, "error")
+	}
+
+	if raw, found := object["important_tokens"]; found {
+		err = json.Unmarshal(raw, &a.ImportantTokens)
+		if err != nil {
+			return fmt.Errorf("error reading 'important_tokens': %w", err)
+		}
+		delete(object, "important_tokens")
+	}
+
+	if raw, found := object["lines"]; found {
+		err = json.Unmarshal(raw, &a.Lines)
+		if err != nil {
+			return fmt.Errorf("error reading 'lines': %w", err)
+		}
+		delete(object, "lines")
+	}
+
+	if raw, found := object["ok"]; found {
+		err = json.Unmarshal(raw, &a.Ok)
+		if err != nil {
+			return fmt.Errorf("error reading 'ok': %w", err)
+		}
+		delete(object, "ok")
+	}
+
+	if raw, found := object["provider"]; found {
+		err = json.Unmarshal(raw, &a.Provider)
+		if err != nil {
+			return fmt.Errorf("error reading 'provider': %w", err)
+		}
+		delete(object, "provider")
+	}
+
+	if raw, found := object["stats"]; found {
+		err = json.Unmarshal(raw, &a.Stats)
+		if err != nil {
+			return fmt.Errorf("error reading 'stats': %w", err)
+		}
+		delete(object, "stats")
+	}
+
+	if raw, found := object["text"]; found {
+		err = json.Unmarshal(raw, &a.Text)
+		if err != nil {
+			return fmt.Errorf("error reading 'text': %w", err)
+		}
+		delete(object, "text")
+	}
+
+	if raw, found := object["tokens"]; found {
+		err = json.Unmarshal(raw, &a.Tokens)
+		if err != nil {
+			return fmt.Errorf("error reading 'tokens': %w", err)
+		}
+		delete(object, "tokens")
+	}
+
+	if raw, found := object["version"]; found {
+		err = json.Unmarshal(raw, &a.Version)
+		if err != nil {
+			return fmt.Errorf("error reading 'version': %w", err)
+		}
+		delete(object, "version")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for AtlasOCRSummary to handle AdditionalProperties
+func (a AtlasOCRSummary) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.Error != nil {
+		object["error"], err = json.Marshal(a.Error)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'error': %w", err)
+		}
+	}
+
+	if a.ImportantTokens != nil {
+		object["important_tokens"], err = json.Marshal(a.ImportantTokens)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'important_tokens': %w", err)
+		}
+	}
+
+	if a.Lines != nil {
+		object["lines"], err = json.Marshal(a.Lines)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'lines': %w", err)
+		}
+	}
+
+	if a.Ok != nil {
+		object["ok"], err = json.Marshal(a.Ok)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'ok': %w", err)
+		}
+	}
+
+	if a.Provider != nil {
+		object["provider"], err = json.Marshal(a.Provider)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'provider': %w", err)
+		}
+	}
+
+	if a.Stats != nil {
+		object["stats"], err = json.Marshal(a.Stats)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'stats': %w", err)
+		}
+	}
+
+	if a.Text != nil {
+		object["text"], err = json.Marshal(a.Text)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'text': %w", err)
+		}
+	}
+
+	if a.Tokens != nil {
+		object["tokens"], err = json.Marshal(a.Tokens)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'tokens': %w", err)
+		}
+	}
+
+	if a.Version != nil {
+		object["version"], err = json.Marshal(a.Version)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'version': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for AtlasOCRSummaryStats. Returns the specified
+// element and whether it was found
+func (a AtlasOCRSummaryStats) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for AtlasOCRSummaryStats
+func (a *AtlasOCRSummaryStats) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for AtlasOCRSummaryStats to handle AdditionalProperties
+func (a *AtlasOCRSummaryStats) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["avg_confidence"]; found {
+		err = json.Unmarshal(raw, &a.AvgConfidence)
+		if err != nil {
+			return fmt.Errorf("error reading 'avg_confidence': %w", err)
+		}
+		delete(object, "avg_confidence")
+	}
+
+	if raw, found := object["batch_latency_ms"]; found {
+		err = json.Unmarshal(raw, &a.BatchLatencyMs)
+		if err != nil {
+			return fmt.Errorf("error reading 'batch_latency_ms': %w", err)
+		}
+		delete(object, "batch_latency_ms")
+	}
+
+	if raw, found := object["important_token_count"]; found {
+		err = json.Unmarshal(raw, &a.ImportantTokenCount)
+		if err != nil {
+			return fmt.Errorf("error reading 'important_token_count': %w", err)
+		}
+		delete(object, "important_token_count")
+	}
+
+	if raw, found := object["latency_ms"]; found {
+		err = json.Unmarshal(raw, &a.LatencyMs)
+		if err != nil {
+			return fmt.Errorf("error reading 'latency_ms': %w", err)
+		}
+		delete(object, "latency_ms")
+	}
+
+	if raw, found := object["token_count"]; found {
+		err = json.Unmarshal(raw, &a.TokenCount)
+		if err != nil {
+			return fmt.Errorf("error reading 'token_count': %w", err)
+		}
+		delete(object, "token_count")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for AtlasOCRSummaryStats to handle AdditionalProperties
+func (a AtlasOCRSummaryStats) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.AvgConfidence != nil {
+		object["avg_confidence"], err = json.Marshal(a.AvgConfidence)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'avg_confidence': %w", err)
+		}
+	}
+
+	if a.BatchLatencyMs != nil {
+		object["batch_latency_ms"], err = json.Marshal(a.BatchLatencyMs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'batch_latency_ms': %w", err)
+		}
+	}
+
+	if a.ImportantTokenCount != nil {
+		object["important_token_count"], err = json.Marshal(a.ImportantTokenCount)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'important_token_count': %w", err)
+		}
+	}
+
+	if a.LatencyMs != nil {
+		object["latency_ms"], err = json.Marshal(a.LatencyMs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'latency_ms': %w", err)
+		}
+	}
+
+	if a.TokenCount != nil {
+		object["token_count"], err = json.Marshal(a.TokenCount)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'token_count': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
 
 // Getter for additional properties for CompletionMessage. Returns the specified
 // element and whether it was found
@@ -11255,25 +11981,25 @@ func (a RunningTestMetadataContent) MarshalJSON() ([]byte, error) {
 	return json.Marshal(object)
 }
 
-// Getter for additional properties for TestInput. Returns the specified
+// Getter for additional properties for Test. Returns the specified
 // element and whether it was found
-func (a TestInput) Get(fieldName string) (value interface{}, found bool) {
+func (a Test) Get(fieldName string) (value interface{}, found bool) {
 	if a.AdditionalProperties != nil {
 		value, found = a.AdditionalProperties[fieldName]
 	}
 	return
 }
 
-// Setter for additional properties for TestInput
-func (a *TestInput) Set(fieldName string, value interface{}) {
+// Setter for additional properties for Test
+func (a *Test) Set(fieldName string, value interface{}) {
 	if a.AdditionalProperties == nil {
 		a.AdditionalProperties = make(map[string]interface{})
 	}
 	a.AdditionalProperties[fieldName] = value
 }
 
-// Override default JSON handling for TestInput to handle AdditionalProperties
-func (a *TestInput) UnmarshalJSON(b []byte) error {
+// Override default JSON handling for Test to handle AdditionalProperties
+func (a *Test) UnmarshalJSON(b []byte) error {
 	object := make(map[string]json.RawMessage)
 	err := json.Unmarshal(b, &object)
 	if err != nil {
@@ -11558,556 +12284,8 @@ func (a *TestInput) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// Override default JSON handling for TestInput to handle AdditionalProperties
-func (a TestInput) MarshalJSON() ([]byte, error) {
-	var err error
-	object := make(map[string]json.RawMessage)
-
-	if a.AppId != nil {
-		object["app_id"], err = json.Marshal(a.AppId)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'app_id': %w", err)
-		}
-	}
-
-	if a.AppLink != nil {
-		object["app_link"], err = json.Marshal(a.AppLink)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'app_link': %w", err)
-		}
-	}
-
-	if a.AppPackage != nil {
-		object["app_package"], err = json.Marshal(a.AppPackage)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'app_package': %w", err)
-		}
-	}
-
-	if a.BackendUrl != nil {
-		object["backend_url"], err = json.Marshal(a.BackendUrl)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'backend_url': %w", err)
-		}
-	}
-
-	if a.CachedElements != nil {
-		object["cached_elements"], err = json.Marshal(a.CachedElements)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'cached_elements': %w", err)
-		}
-	}
-
-	if a.DeviceLocal != nil {
-		object["device_local"], err = json.Marshal(a.DeviceLocal)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'device_local': %w", err)
-		}
-	}
-
-	if a.ExpectedVersion != nil {
-		object["expected_version"], err = json.Marshal(a.ExpectedVersion)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'expected_version': %w", err)
-		}
-	}
-
-	if a.Flowdescription != nil {
-		object["flowdescription"], err = json.Marshal(a.Flowdescription)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'flowdescription': %w", err)
-		}
-	}
-
-	if a.GetDownloads != nil {
-		object["get_downloads"], err = json.Marshal(a.GetDownloads)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'get_downloads': %w", err)
-		}
-	}
-
-	if a.Id != nil {
-		object["id"], err = json.Marshal(a.Id)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'id': %w", err)
-		}
-	}
-
-	if a.LastDuration != nil {
-		object["last_duration"], err = json.Marshal(a.LastDuration)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'last_duration': %w", err)
-		}
-	}
-
-	if a.LastExecutionId != nil {
-		object["last_execution_id"], err = json.Marshal(a.LastExecutionId)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'last_execution_id': %w", err)
-		}
-	}
-
-	if a.LastExecutionTime != nil {
-		object["last_execution_time"], err = json.Marshal(a.LastExecutionTime)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'last_execution_time': %w", err)
-		}
-	}
-
-	if a.LastModifiedBy != nil {
-		object["last_modified_by"], err = json.Marshal(a.LastModifiedBy)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'last_modified_by': %w", err)
-		}
-	}
-
-	if a.LastStatus != nil {
-		object["last_status"], err = json.Marshal(a.LastStatus)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'last_status': %w", err)
-		}
-	}
-
-	if a.Link != nil {
-		object["link"], err = json.Marshal(a.Link)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'link': %w", err)
-		}
-	}
-
-	if a.LlmModelName != nil {
-		object["llm_model_name"], err = json.Marshal(a.LlmModelName)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'llm_model_name': %w", err)
-		}
-	}
-
-	if a.MobileTargets != nil {
-		object["mobile_targets"], err = json.Marshal(a.MobileTargets)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'mobile_targets': %w", err)
-		}
-	}
-
-	if a.Name != nil {
-		object["name"], err = json.Marshal(a.Name)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'name': %w", err)
-		}
-	}
-
-	if a.Orientation != nil {
-		object["orientation"], err = json.Marshal(a.Orientation)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'orientation': %w", err)
-		}
-	}
-
-	if a.Owner != nil {
-		object["owner"], err = json.Marshal(a.Owner)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'owner': %w", err)
-		}
-	}
-
-	if a.PackageName != nil {
-		object["package_name"], err = json.Marshal(a.PackageName)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'package_name': %w", err)
-		}
-	}
-
-	if a.PinnedVersion != nil {
-		object["pinned_version"], err = json.Marshal(a.PinnedVersion)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'pinned_version': %w", err)
-		}
-	}
-
-	if a.Platform != nil {
-		object["platform"], err = json.Marshal(a.Platform)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'platform': %w", err)
-		}
-	}
-
-	if a.ResolvedBuild != nil {
-		object["resolved_build"], err = json.Marshal(a.ResolvedBuild)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'resolved_build': %w", err)
-		}
-	}
-
-	if a.Retries != nil {
-		object["retries"], err = json.Marshal(a.Retries)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'retries': %w", err)
-		}
-	}
-
-	if a.RunConfig != nil {
-		object["run_config"], err = json.Marshal(a.RunConfig)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'run_config': %w", err)
-		}
-	}
-
-	if a.RunId != nil {
-		object["run_id"], err = json.Marshal(a.RunId)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'run_id': %w", err)
-		}
-	}
-
-	if a.Tags != nil {
-		object["tags"], err = json.Marshal(a.Tags)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'tags': %w", err)
-		}
-	}
-
-	if a.Tasks != nil {
-		object["tasks"], err = json.Marshal(a.Tasks)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'tasks': %w", err)
-		}
-	}
-
-	if a.UserId != nil {
-		object["user_id"], err = json.Marshal(a.UserId)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'user_id': %w", err)
-		}
-	}
-
-	if a.Version != nil {
-		object["version"], err = json.Marshal(a.Version)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'version': %w", err)
-		}
-	}
-
-	if a.Viewport != nil {
-		object["viewport"], err = json.Marshal(a.Viewport)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'viewport': %w", err)
-		}
-	}
-
-	for fieldName, field := range a.AdditionalProperties {
-		object[fieldName], err = json.Marshal(field)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
-		}
-	}
-	return json.Marshal(object)
-}
-
-// Getter for additional properties for TestOutput. Returns the specified
-// element and whether it was found
-func (a TestOutput) Get(fieldName string) (value interface{}, found bool) {
-	if a.AdditionalProperties != nil {
-		value, found = a.AdditionalProperties[fieldName]
-	}
-	return
-}
-
-// Setter for additional properties for TestOutput
-func (a *TestOutput) Set(fieldName string, value interface{}) {
-	if a.AdditionalProperties == nil {
-		a.AdditionalProperties = make(map[string]interface{})
-	}
-	a.AdditionalProperties[fieldName] = value
-}
-
-// Override default JSON handling for TestOutput to handle AdditionalProperties
-func (a *TestOutput) UnmarshalJSON(b []byte) error {
-	object := make(map[string]json.RawMessage)
-	err := json.Unmarshal(b, &object)
-	if err != nil {
-		return err
-	}
-
-	if raw, found := object["app_id"]; found {
-		err = json.Unmarshal(raw, &a.AppId)
-		if err != nil {
-			return fmt.Errorf("error reading 'app_id': %w", err)
-		}
-		delete(object, "app_id")
-	}
-
-	if raw, found := object["app_link"]; found {
-		err = json.Unmarshal(raw, &a.AppLink)
-		if err != nil {
-			return fmt.Errorf("error reading 'app_link': %w", err)
-		}
-		delete(object, "app_link")
-	}
-
-	if raw, found := object["app_package"]; found {
-		err = json.Unmarshal(raw, &a.AppPackage)
-		if err != nil {
-			return fmt.Errorf("error reading 'app_package': %w", err)
-		}
-		delete(object, "app_package")
-	}
-
-	if raw, found := object["backend_url"]; found {
-		err = json.Unmarshal(raw, &a.BackendUrl)
-		if err != nil {
-			return fmt.Errorf("error reading 'backend_url': %w", err)
-		}
-		delete(object, "backend_url")
-	}
-
-	if raw, found := object["cached_elements"]; found {
-		err = json.Unmarshal(raw, &a.CachedElements)
-		if err != nil {
-			return fmt.Errorf("error reading 'cached_elements': %w", err)
-		}
-		delete(object, "cached_elements")
-	}
-
-	if raw, found := object["device_local"]; found {
-		err = json.Unmarshal(raw, &a.DeviceLocal)
-		if err != nil {
-			return fmt.Errorf("error reading 'device_local': %w", err)
-		}
-		delete(object, "device_local")
-	}
-
-	if raw, found := object["expected_version"]; found {
-		err = json.Unmarshal(raw, &a.ExpectedVersion)
-		if err != nil {
-			return fmt.Errorf("error reading 'expected_version': %w", err)
-		}
-		delete(object, "expected_version")
-	}
-
-	if raw, found := object["flowdescription"]; found {
-		err = json.Unmarshal(raw, &a.Flowdescription)
-		if err != nil {
-			return fmt.Errorf("error reading 'flowdescription': %w", err)
-		}
-		delete(object, "flowdescription")
-	}
-
-	if raw, found := object["get_downloads"]; found {
-		err = json.Unmarshal(raw, &a.GetDownloads)
-		if err != nil {
-			return fmt.Errorf("error reading 'get_downloads': %w", err)
-		}
-		delete(object, "get_downloads")
-	}
-
-	if raw, found := object["id"]; found {
-		err = json.Unmarshal(raw, &a.Id)
-		if err != nil {
-			return fmt.Errorf("error reading 'id': %w", err)
-		}
-		delete(object, "id")
-	}
-
-	if raw, found := object["last_duration"]; found {
-		err = json.Unmarshal(raw, &a.LastDuration)
-		if err != nil {
-			return fmt.Errorf("error reading 'last_duration': %w", err)
-		}
-		delete(object, "last_duration")
-	}
-
-	if raw, found := object["last_execution_id"]; found {
-		err = json.Unmarshal(raw, &a.LastExecutionId)
-		if err != nil {
-			return fmt.Errorf("error reading 'last_execution_id': %w", err)
-		}
-		delete(object, "last_execution_id")
-	}
-
-	if raw, found := object["last_execution_time"]; found {
-		err = json.Unmarshal(raw, &a.LastExecutionTime)
-		if err != nil {
-			return fmt.Errorf("error reading 'last_execution_time': %w", err)
-		}
-		delete(object, "last_execution_time")
-	}
-
-	if raw, found := object["last_modified_by"]; found {
-		err = json.Unmarshal(raw, &a.LastModifiedBy)
-		if err != nil {
-			return fmt.Errorf("error reading 'last_modified_by': %w", err)
-		}
-		delete(object, "last_modified_by")
-	}
-
-	if raw, found := object["last_status"]; found {
-		err = json.Unmarshal(raw, &a.LastStatus)
-		if err != nil {
-			return fmt.Errorf("error reading 'last_status': %w", err)
-		}
-		delete(object, "last_status")
-	}
-
-	if raw, found := object["link"]; found {
-		err = json.Unmarshal(raw, &a.Link)
-		if err != nil {
-			return fmt.Errorf("error reading 'link': %w", err)
-		}
-		delete(object, "link")
-	}
-
-	if raw, found := object["llm_model_name"]; found {
-		err = json.Unmarshal(raw, &a.LlmModelName)
-		if err != nil {
-			return fmt.Errorf("error reading 'llm_model_name': %w", err)
-		}
-		delete(object, "llm_model_name")
-	}
-
-	if raw, found := object["mobile_targets"]; found {
-		err = json.Unmarshal(raw, &a.MobileTargets)
-		if err != nil {
-			return fmt.Errorf("error reading 'mobile_targets': %w", err)
-		}
-		delete(object, "mobile_targets")
-	}
-
-	if raw, found := object["name"]; found {
-		err = json.Unmarshal(raw, &a.Name)
-		if err != nil {
-			return fmt.Errorf("error reading 'name': %w", err)
-		}
-		delete(object, "name")
-	}
-
-	if raw, found := object["orientation"]; found {
-		err = json.Unmarshal(raw, &a.Orientation)
-		if err != nil {
-			return fmt.Errorf("error reading 'orientation': %w", err)
-		}
-		delete(object, "orientation")
-	}
-
-	if raw, found := object["owner"]; found {
-		err = json.Unmarshal(raw, &a.Owner)
-		if err != nil {
-			return fmt.Errorf("error reading 'owner': %w", err)
-		}
-		delete(object, "owner")
-	}
-
-	if raw, found := object["package_name"]; found {
-		err = json.Unmarshal(raw, &a.PackageName)
-		if err != nil {
-			return fmt.Errorf("error reading 'package_name': %w", err)
-		}
-		delete(object, "package_name")
-	}
-
-	if raw, found := object["pinned_version"]; found {
-		err = json.Unmarshal(raw, &a.PinnedVersion)
-		if err != nil {
-			return fmt.Errorf("error reading 'pinned_version': %w", err)
-		}
-		delete(object, "pinned_version")
-	}
-
-	if raw, found := object["platform"]; found {
-		err = json.Unmarshal(raw, &a.Platform)
-		if err != nil {
-			return fmt.Errorf("error reading 'platform': %w", err)
-		}
-		delete(object, "platform")
-	}
-
-	if raw, found := object["resolved_build"]; found {
-		err = json.Unmarshal(raw, &a.ResolvedBuild)
-		if err != nil {
-			return fmt.Errorf("error reading 'resolved_build': %w", err)
-		}
-		delete(object, "resolved_build")
-	}
-
-	if raw, found := object["retries"]; found {
-		err = json.Unmarshal(raw, &a.Retries)
-		if err != nil {
-			return fmt.Errorf("error reading 'retries': %w", err)
-		}
-		delete(object, "retries")
-	}
-
-	if raw, found := object["run_config"]; found {
-		err = json.Unmarshal(raw, &a.RunConfig)
-		if err != nil {
-			return fmt.Errorf("error reading 'run_config': %w", err)
-		}
-		delete(object, "run_config")
-	}
-
-	if raw, found := object["run_id"]; found {
-		err = json.Unmarshal(raw, &a.RunId)
-		if err != nil {
-			return fmt.Errorf("error reading 'run_id': %w", err)
-		}
-		delete(object, "run_id")
-	}
-
-	if raw, found := object["tags"]; found {
-		err = json.Unmarshal(raw, &a.Tags)
-		if err != nil {
-			return fmt.Errorf("error reading 'tags': %w", err)
-		}
-		delete(object, "tags")
-	}
-
-	if raw, found := object["tasks"]; found {
-		err = json.Unmarshal(raw, &a.Tasks)
-		if err != nil {
-			return fmt.Errorf("error reading 'tasks': %w", err)
-		}
-		delete(object, "tasks")
-	}
-
-	if raw, found := object["user_id"]; found {
-		err = json.Unmarshal(raw, &a.UserId)
-		if err != nil {
-			return fmt.Errorf("error reading 'user_id': %w", err)
-		}
-		delete(object, "user_id")
-	}
-
-	if raw, found := object["version"]; found {
-		err = json.Unmarshal(raw, &a.Version)
-		if err != nil {
-			return fmt.Errorf("error reading 'version': %w", err)
-		}
-		delete(object, "version")
-	}
-
-	if raw, found := object["viewport"]; found {
-		err = json.Unmarshal(raw, &a.Viewport)
-		if err != nil {
-			return fmt.Errorf("error reading 'viewport': %w", err)
-		}
-		delete(object, "viewport")
-	}
-
-	if len(object) != 0 {
-		a.AdditionalProperties = make(map[string]interface{})
-		for fieldName, fieldBuf := range object {
-			var fieldVal interface{}
-			err := json.Unmarshal(fieldBuf, &fieldVal)
-			if err != nil {
-				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
-			}
-			a.AdditionalProperties[fieldName] = fieldVal
-		}
-	}
-	return nil
-}
-
-// Override default JSON handling for TestOutput to handle AdditionalProperties
-func (a TestOutput) MarshalJSON() ([]byte, error) {
+// Override default JSON handling for Test to handle AdditionalProperties
+func (a Test) MarshalJSON() ([]byte, error) {
 	var err error
 	object := make(map[string]json.RawMessage)
 
@@ -12691,22 +12869,22 @@ func (t *BlocksCreationRequest_Blocks_Item) MergeActionBlock(v ActionBlock) erro
 	return err
 }
 
-// AsIfBlockInput returns the union data inside the BlocksCreationRequest_Blocks_Item as a IfBlockInput
-func (t BlocksCreationRequest_Blocks_Item) AsIfBlockInput() (IfBlockInput, error) {
-	var body IfBlockInput
+// AsIfBlock returns the union data inside the BlocksCreationRequest_Blocks_Item as a IfBlock
+func (t BlocksCreationRequest_Blocks_Item) AsIfBlock() (IfBlock, error) {
+	var body IfBlock
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromIfBlockInput overwrites any union data inside the BlocksCreationRequest_Blocks_Item as the provided IfBlockInput
-func (t *BlocksCreationRequest_Blocks_Item) FromIfBlockInput(v IfBlockInput) error {
+// FromIfBlock overwrites any union data inside the BlocksCreationRequest_Blocks_Item as the provided IfBlock
+func (t *BlocksCreationRequest_Blocks_Item) FromIfBlock(v IfBlock) error {
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeIfBlockInput performs a merge with any union data inside the BlocksCreationRequest_Blocks_Item, using the provided IfBlockInput
-func (t *BlocksCreationRequest_Blocks_Item) MergeIfBlockInput(v IfBlockInput) error {
+// MergeIfBlock performs a merge with any union data inside the BlocksCreationRequest_Blocks_Item, using the provided IfBlock
+func (t *BlocksCreationRequest_Blocks_Item) MergeIfBlock(v IfBlock) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -12717,22 +12895,22 @@ func (t *BlocksCreationRequest_Blocks_Item) MergeIfBlockInput(v IfBlockInput) er
 	return err
 }
 
-// AsWhileBlockInput returns the union data inside the BlocksCreationRequest_Blocks_Item as a WhileBlockInput
-func (t BlocksCreationRequest_Blocks_Item) AsWhileBlockInput() (WhileBlockInput, error) {
-	var body WhileBlockInput
+// AsWhileBlock returns the union data inside the BlocksCreationRequest_Blocks_Item as a WhileBlock
+func (t BlocksCreationRequest_Blocks_Item) AsWhileBlock() (WhileBlock, error) {
+	var body WhileBlock
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromWhileBlockInput overwrites any union data inside the BlocksCreationRequest_Blocks_Item as the provided WhileBlockInput
-func (t *BlocksCreationRequest_Blocks_Item) FromWhileBlockInput(v WhileBlockInput) error {
+// FromWhileBlock overwrites any union data inside the BlocksCreationRequest_Blocks_Item as the provided WhileBlock
+func (t *BlocksCreationRequest_Blocks_Item) FromWhileBlock(v WhileBlock) error {
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeWhileBlockInput performs a merge with any union data inside the BlocksCreationRequest_Blocks_Item, using the provided WhileBlockInput
-func (t *BlocksCreationRequest_Blocks_Item) MergeWhileBlockInput(v WhileBlockInput) error {
+// MergeWhileBlock performs a merge with any union data inside the BlocksCreationRequest_Blocks_Item, using the provided WhileBlock
+func (t *BlocksCreationRequest_Blocks_Item) MergeWhileBlock(v WhileBlock) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -12779,22 +12957,22 @@ func (t *BlocksToYamlRequest_Blocks_Item) MergeActionBlock(v ActionBlock) error 
 	return err
 }
 
-// AsIfBlockInput returns the union data inside the BlocksToYamlRequest_Blocks_Item as a IfBlockInput
-func (t BlocksToYamlRequest_Blocks_Item) AsIfBlockInput() (IfBlockInput, error) {
-	var body IfBlockInput
+// AsIfBlock returns the union data inside the BlocksToYamlRequest_Blocks_Item as a IfBlock
+func (t BlocksToYamlRequest_Blocks_Item) AsIfBlock() (IfBlock, error) {
+	var body IfBlock
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromIfBlockInput overwrites any union data inside the BlocksToYamlRequest_Blocks_Item as the provided IfBlockInput
-func (t *BlocksToYamlRequest_Blocks_Item) FromIfBlockInput(v IfBlockInput) error {
+// FromIfBlock overwrites any union data inside the BlocksToYamlRequest_Blocks_Item as the provided IfBlock
+func (t *BlocksToYamlRequest_Blocks_Item) FromIfBlock(v IfBlock) error {
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeIfBlockInput performs a merge with any union data inside the BlocksToYamlRequest_Blocks_Item, using the provided IfBlockInput
-func (t *BlocksToYamlRequest_Blocks_Item) MergeIfBlockInput(v IfBlockInput) error {
+// MergeIfBlock performs a merge with any union data inside the BlocksToYamlRequest_Blocks_Item, using the provided IfBlock
+func (t *BlocksToYamlRequest_Blocks_Item) MergeIfBlock(v IfBlock) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -12805,22 +12983,22 @@ func (t *BlocksToYamlRequest_Blocks_Item) MergeIfBlockInput(v IfBlockInput) erro
 	return err
 }
 
-// AsWhileBlockInput returns the union data inside the BlocksToYamlRequest_Blocks_Item as a WhileBlockInput
-func (t BlocksToYamlRequest_Blocks_Item) AsWhileBlockInput() (WhileBlockInput, error) {
-	var body WhileBlockInput
+// AsWhileBlock returns the union data inside the BlocksToYamlRequest_Blocks_Item as a WhileBlock
+func (t BlocksToYamlRequest_Blocks_Item) AsWhileBlock() (WhileBlock, error) {
+	var body WhileBlock
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromWhileBlockInput overwrites any union data inside the BlocksToYamlRequest_Blocks_Item as the provided WhileBlockInput
-func (t *BlocksToYamlRequest_Blocks_Item) FromWhileBlockInput(v WhileBlockInput) error {
+// FromWhileBlock overwrites any union data inside the BlocksToYamlRequest_Blocks_Item as the provided WhileBlock
+func (t *BlocksToYamlRequest_Blocks_Item) FromWhileBlock(v WhileBlock) error {
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeWhileBlockInput performs a merge with any union data inside the BlocksToYamlRequest_Blocks_Item, using the provided WhileBlockInput
-func (t *BlocksToYamlRequest_Blocks_Item) MergeWhileBlockInput(v WhileBlockInput) error {
+// MergeWhileBlock performs a merge with any union data inside the BlocksToYamlRequest_Blocks_Item, using the provided WhileBlock
+func (t *BlocksToYamlRequest_Blocks_Item) MergeWhileBlock(v WhileBlock) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -12991,22 +13169,22 @@ func (t *ConversionResponse_ConvertedContent) UnmarshalJSON(b []byte) error {
 	return err
 }
 
-// AsActionBlock returns the union data inside the IfBlockInput_ElseChildren_Item as a ActionBlock
-func (t IfBlockInput_ElseChildren_Item) AsActionBlock() (ActionBlock, error) {
+// AsActionBlock returns the union data inside the IfBlock_ElseChildren_Item as a ActionBlock
+func (t IfBlock_ElseChildren_Item) AsActionBlock() (ActionBlock, error) {
 	var body ActionBlock
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromActionBlock overwrites any union data inside the IfBlockInput_ElseChildren_Item as the provided ActionBlock
-func (t *IfBlockInput_ElseChildren_Item) FromActionBlock(v ActionBlock) error {
+// FromActionBlock overwrites any union data inside the IfBlock_ElseChildren_Item as the provided ActionBlock
+func (t *IfBlock_ElseChildren_Item) FromActionBlock(v ActionBlock) error {
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeActionBlock performs a merge with any union data inside the IfBlockInput_ElseChildren_Item, using the provided ActionBlock
-func (t *IfBlockInput_ElseChildren_Item) MergeActionBlock(v ActionBlock) error {
+// MergeActionBlock performs a merge with any union data inside the IfBlock_ElseChildren_Item, using the provided ActionBlock
+func (t *IfBlock_ElseChildren_Item) MergeActionBlock(v ActionBlock) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -13017,22 +13195,22 @@ func (t *IfBlockInput_ElseChildren_Item) MergeActionBlock(v ActionBlock) error {
 	return err
 }
 
-// AsIfBlockInput returns the union data inside the IfBlockInput_ElseChildren_Item as a IfBlockInput
-func (t IfBlockInput_ElseChildren_Item) AsIfBlockInput() (IfBlockInput, error) {
-	var body IfBlockInput
+// AsIfBlock returns the union data inside the IfBlock_ElseChildren_Item as a IfBlock
+func (t IfBlock_ElseChildren_Item) AsIfBlock() (IfBlock, error) {
+	var body IfBlock
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromIfBlockInput overwrites any union data inside the IfBlockInput_ElseChildren_Item as the provided IfBlockInput
-func (t *IfBlockInput_ElseChildren_Item) FromIfBlockInput(v IfBlockInput) error {
+// FromIfBlock overwrites any union data inside the IfBlock_ElseChildren_Item as the provided IfBlock
+func (t *IfBlock_ElseChildren_Item) FromIfBlock(v IfBlock) error {
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeIfBlockInput performs a merge with any union data inside the IfBlockInput_ElseChildren_Item, using the provided IfBlockInput
-func (t *IfBlockInput_ElseChildren_Item) MergeIfBlockInput(v IfBlockInput) error {
+// MergeIfBlock performs a merge with any union data inside the IfBlock_ElseChildren_Item, using the provided IfBlock
+func (t *IfBlock_ElseChildren_Item) MergeIfBlock(v IfBlock) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -13043,22 +13221,22 @@ func (t *IfBlockInput_ElseChildren_Item) MergeIfBlockInput(v IfBlockInput) error
 	return err
 }
 
-// AsWhileBlockInput returns the union data inside the IfBlockInput_ElseChildren_Item as a WhileBlockInput
-func (t IfBlockInput_ElseChildren_Item) AsWhileBlockInput() (WhileBlockInput, error) {
-	var body WhileBlockInput
+// AsWhileBlock returns the union data inside the IfBlock_ElseChildren_Item as a WhileBlock
+func (t IfBlock_ElseChildren_Item) AsWhileBlock() (WhileBlock, error) {
+	var body WhileBlock
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromWhileBlockInput overwrites any union data inside the IfBlockInput_ElseChildren_Item as the provided WhileBlockInput
-func (t *IfBlockInput_ElseChildren_Item) FromWhileBlockInput(v WhileBlockInput) error {
+// FromWhileBlock overwrites any union data inside the IfBlock_ElseChildren_Item as the provided WhileBlock
+func (t *IfBlock_ElseChildren_Item) FromWhileBlock(v WhileBlock) error {
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeWhileBlockInput performs a merge with any union data inside the IfBlockInput_ElseChildren_Item, using the provided WhileBlockInput
-func (t *IfBlockInput_ElseChildren_Item) MergeWhileBlockInput(v WhileBlockInput) error {
+// MergeWhileBlock performs a merge with any union data inside the IfBlock_ElseChildren_Item, using the provided WhileBlock
+func (t *IfBlock_ElseChildren_Item) MergeWhileBlock(v WhileBlock) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -13069,32 +13247,32 @@ func (t *IfBlockInput_ElseChildren_Item) MergeWhileBlockInput(v WhileBlockInput)
 	return err
 }
 
-func (t IfBlockInput_ElseChildren_Item) MarshalJSON() ([]byte, error) {
+func (t IfBlock_ElseChildren_Item) MarshalJSON() ([]byte, error) {
 	b, err := t.union.MarshalJSON()
 	return b, err
 }
 
-func (t *IfBlockInput_ElseChildren_Item) UnmarshalJSON(b []byte) error {
+func (t *IfBlock_ElseChildren_Item) UnmarshalJSON(b []byte) error {
 	err := t.union.UnmarshalJSON(b)
 	return err
 }
 
-// AsActionBlock returns the union data inside the IfBlockInput_ThenChildren_Item as a ActionBlock
-func (t IfBlockInput_ThenChildren_Item) AsActionBlock() (ActionBlock, error) {
+// AsActionBlock returns the union data inside the IfBlock_ThenChildren_Item as a ActionBlock
+func (t IfBlock_ThenChildren_Item) AsActionBlock() (ActionBlock, error) {
 	var body ActionBlock
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromActionBlock overwrites any union data inside the IfBlockInput_ThenChildren_Item as the provided ActionBlock
-func (t *IfBlockInput_ThenChildren_Item) FromActionBlock(v ActionBlock) error {
+// FromActionBlock overwrites any union data inside the IfBlock_ThenChildren_Item as the provided ActionBlock
+func (t *IfBlock_ThenChildren_Item) FromActionBlock(v ActionBlock) error {
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeActionBlock performs a merge with any union data inside the IfBlockInput_ThenChildren_Item, using the provided ActionBlock
-func (t *IfBlockInput_ThenChildren_Item) MergeActionBlock(v ActionBlock) error {
+// MergeActionBlock performs a merge with any union data inside the IfBlock_ThenChildren_Item, using the provided ActionBlock
+func (t *IfBlock_ThenChildren_Item) MergeActionBlock(v ActionBlock) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -13105,22 +13283,22 @@ func (t *IfBlockInput_ThenChildren_Item) MergeActionBlock(v ActionBlock) error {
 	return err
 }
 
-// AsIfBlockInput returns the union data inside the IfBlockInput_ThenChildren_Item as a IfBlockInput
-func (t IfBlockInput_ThenChildren_Item) AsIfBlockInput() (IfBlockInput, error) {
-	var body IfBlockInput
+// AsIfBlock returns the union data inside the IfBlock_ThenChildren_Item as a IfBlock
+func (t IfBlock_ThenChildren_Item) AsIfBlock() (IfBlock, error) {
+	var body IfBlock
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromIfBlockInput overwrites any union data inside the IfBlockInput_ThenChildren_Item as the provided IfBlockInput
-func (t *IfBlockInput_ThenChildren_Item) FromIfBlockInput(v IfBlockInput) error {
+// FromIfBlock overwrites any union data inside the IfBlock_ThenChildren_Item as the provided IfBlock
+func (t *IfBlock_ThenChildren_Item) FromIfBlock(v IfBlock) error {
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeIfBlockInput performs a merge with any union data inside the IfBlockInput_ThenChildren_Item, using the provided IfBlockInput
-func (t *IfBlockInput_ThenChildren_Item) MergeIfBlockInput(v IfBlockInput) error {
+// MergeIfBlock performs a merge with any union data inside the IfBlock_ThenChildren_Item, using the provided IfBlock
+func (t *IfBlock_ThenChildren_Item) MergeIfBlock(v IfBlock) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -13131,22 +13309,22 @@ func (t *IfBlockInput_ThenChildren_Item) MergeIfBlockInput(v IfBlockInput) error
 	return err
 }
 
-// AsWhileBlockInput returns the union data inside the IfBlockInput_ThenChildren_Item as a WhileBlockInput
-func (t IfBlockInput_ThenChildren_Item) AsWhileBlockInput() (WhileBlockInput, error) {
-	var body WhileBlockInput
+// AsWhileBlock returns the union data inside the IfBlock_ThenChildren_Item as a WhileBlock
+func (t IfBlock_ThenChildren_Item) AsWhileBlock() (WhileBlock, error) {
+	var body WhileBlock
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromWhileBlockInput overwrites any union data inside the IfBlockInput_ThenChildren_Item as the provided WhileBlockInput
-func (t *IfBlockInput_ThenChildren_Item) FromWhileBlockInput(v WhileBlockInput) error {
+// FromWhileBlock overwrites any union data inside the IfBlock_ThenChildren_Item as the provided WhileBlock
+func (t *IfBlock_ThenChildren_Item) FromWhileBlock(v WhileBlock) error {
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeWhileBlockInput performs a merge with any union data inside the IfBlockInput_ThenChildren_Item, using the provided WhileBlockInput
-func (t *IfBlockInput_ThenChildren_Item) MergeWhileBlockInput(v WhileBlockInput) error {
+// MergeWhileBlock performs a merge with any union data inside the IfBlock_ThenChildren_Item, using the provided WhileBlock
+func (t *IfBlock_ThenChildren_Item) MergeWhileBlock(v WhileBlock) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -13157,188 +13335,12 @@ func (t *IfBlockInput_ThenChildren_Item) MergeWhileBlockInput(v WhileBlockInput)
 	return err
 }
 
-func (t IfBlockInput_ThenChildren_Item) MarshalJSON() ([]byte, error) {
+func (t IfBlock_ThenChildren_Item) MarshalJSON() ([]byte, error) {
 	b, err := t.union.MarshalJSON()
 	return b, err
 }
 
-func (t *IfBlockInput_ThenChildren_Item) UnmarshalJSON(b []byte) error {
-	err := t.union.UnmarshalJSON(b)
-	return err
-}
-
-// AsActionBlock returns the union data inside the IfBlockOutput_ElseChildren_Item as a ActionBlock
-func (t IfBlockOutput_ElseChildren_Item) AsActionBlock() (ActionBlock, error) {
-	var body ActionBlock
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromActionBlock overwrites any union data inside the IfBlockOutput_ElseChildren_Item as the provided ActionBlock
-func (t *IfBlockOutput_ElseChildren_Item) FromActionBlock(v ActionBlock) error {
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeActionBlock performs a merge with any union data inside the IfBlockOutput_ElseChildren_Item, using the provided ActionBlock
-func (t *IfBlockOutput_ElseChildren_Item) MergeActionBlock(v ActionBlock) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsIfBlockOutput returns the union data inside the IfBlockOutput_ElseChildren_Item as a IfBlockOutput
-func (t IfBlockOutput_ElseChildren_Item) AsIfBlockOutput() (IfBlockOutput, error) {
-	var body IfBlockOutput
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromIfBlockOutput overwrites any union data inside the IfBlockOutput_ElseChildren_Item as the provided IfBlockOutput
-func (t *IfBlockOutput_ElseChildren_Item) FromIfBlockOutput(v IfBlockOutput) error {
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeIfBlockOutput performs a merge with any union data inside the IfBlockOutput_ElseChildren_Item, using the provided IfBlockOutput
-func (t *IfBlockOutput_ElseChildren_Item) MergeIfBlockOutput(v IfBlockOutput) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsWhileBlockOutput returns the union data inside the IfBlockOutput_ElseChildren_Item as a WhileBlockOutput
-func (t IfBlockOutput_ElseChildren_Item) AsWhileBlockOutput() (WhileBlockOutput, error) {
-	var body WhileBlockOutput
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromWhileBlockOutput overwrites any union data inside the IfBlockOutput_ElseChildren_Item as the provided WhileBlockOutput
-func (t *IfBlockOutput_ElseChildren_Item) FromWhileBlockOutput(v WhileBlockOutput) error {
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeWhileBlockOutput performs a merge with any union data inside the IfBlockOutput_ElseChildren_Item, using the provided WhileBlockOutput
-func (t *IfBlockOutput_ElseChildren_Item) MergeWhileBlockOutput(v WhileBlockOutput) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-func (t IfBlockOutput_ElseChildren_Item) MarshalJSON() ([]byte, error) {
-	b, err := t.union.MarshalJSON()
-	return b, err
-}
-
-func (t *IfBlockOutput_ElseChildren_Item) UnmarshalJSON(b []byte) error {
-	err := t.union.UnmarshalJSON(b)
-	return err
-}
-
-// AsActionBlock returns the union data inside the IfBlockOutput_ThenChildren_Item as a ActionBlock
-func (t IfBlockOutput_ThenChildren_Item) AsActionBlock() (ActionBlock, error) {
-	var body ActionBlock
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromActionBlock overwrites any union data inside the IfBlockOutput_ThenChildren_Item as the provided ActionBlock
-func (t *IfBlockOutput_ThenChildren_Item) FromActionBlock(v ActionBlock) error {
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeActionBlock performs a merge with any union data inside the IfBlockOutput_ThenChildren_Item, using the provided ActionBlock
-func (t *IfBlockOutput_ThenChildren_Item) MergeActionBlock(v ActionBlock) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsIfBlockOutput returns the union data inside the IfBlockOutput_ThenChildren_Item as a IfBlockOutput
-func (t IfBlockOutput_ThenChildren_Item) AsIfBlockOutput() (IfBlockOutput, error) {
-	var body IfBlockOutput
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromIfBlockOutput overwrites any union data inside the IfBlockOutput_ThenChildren_Item as the provided IfBlockOutput
-func (t *IfBlockOutput_ThenChildren_Item) FromIfBlockOutput(v IfBlockOutput) error {
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeIfBlockOutput performs a merge with any union data inside the IfBlockOutput_ThenChildren_Item, using the provided IfBlockOutput
-func (t *IfBlockOutput_ThenChildren_Item) MergeIfBlockOutput(v IfBlockOutput) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsWhileBlockOutput returns the union data inside the IfBlockOutput_ThenChildren_Item as a WhileBlockOutput
-func (t IfBlockOutput_ThenChildren_Item) AsWhileBlockOutput() (WhileBlockOutput, error) {
-	var body WhileBlockOutput
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromWhileBlockOutput overwrites any union data inside the IfBlockOutput_ThenChildren_Item as the provided WhileBlockOutput
-func (t *IfBlockOutput_ThenChildren_Item) FromWhileBlockOutput(v WhileBlockOutput) error {
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeWhileBlockOutput performs a merge with any union data inside the IfBlockOutput_ThenChildren_Item, using the provided WhileBlockOutput
-func (t *IfBlockOutput_ThenChildren_Item) MergeWhileBlockOutput(v WhileBlockOutput) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-func (t IfBlockOutput_ThenChildren_Item) MarshalJSON() ([]byte, error) {
-	b, err := t.union.MarshalJSON()
-	return b, err
-}
-
-func (t *IfBlockOutput_ThenChildren_Item) UnmarshalJSON(b []byte) error {
+func (t *IfBlock_ThenChildren_Item) UnmarshalJSON(b []byte) error {
 	err := t.union.UnmarshalJSON(b)
 	return err
 }
@@ -13855,22 +13857,22 @@ func (t *TaskReportResponse_ReportMetadata) UnmarshalJSON(b []byte) error {
 	return err
 }
 
-// AsActionBlock returns the union data inside the TestInput_Tasks_0_Item as a ActionBlock
-func (t TestInput_Tasks_0_Item) AsActionBlock() (ActionBlock, error) {
+// AsActionBlock returns the union data inside the Test_Tasks_0_Item as a ActionBlock
+func (t Test_Tasks_0_Item) AsActionBlock() (ActionBlock, error) {
 	var body ActionBlock
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromActionBlock overwrites any union data inside the TestInput_Tasks_0_Item as the provided ActionBlock
-func (t *TestInput_Tasks_0_Item) FromActionBlock(v ActionBlock) error {
+// FromActionBlock overwrites any union data inside the Test_Tasks_0_Item as the provided ActionBlock
+func (t *Test_Tasks_0_Item) FromActionBlock(v ActionBlock) error {
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeActionBlock performs a merge with any union data inside the TestInput_Tasks_0_Item, using the provided ActionBlock
-func (t *TestInput_Tasks_0_Item) MergeActionBlock(v ActionBlock) error {
+// MergeActionBlock performs a merge with any union data inside the Test_Tasks_0_Item, using the provided ActionBlock
+func (t *Test_Tasks_0_Item) MergeActionBlock(v ActionBlock) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -13881,22 +13883,22 @@ func (t *TestInput_Tasks_0_Item) MergeActionBlock(v ActionBlock) error {
 	return err
 }
 
-// AsIfBlockInput returns the union data inside the TestInput_Tasks_0_Item as a IfBlockInput
-func (t TestInput_Tasks_0_Item) AsIfBlockInput() (IfBlockInput, error) {
-	var body IfBlockInput
+// AsIfBlock returns the union data inside the Test_Tasks_0_Item as a IfBlock
+func (t Test_Tasks_0_Item) AsIfBlock() (IfBlock, error) {
+	var body IfBlock
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromIfBlockInput overwrites any union data inside the TestInput_Tasks_0_Item as the provided IfBlockInput
-func (t *TestInput_Tasks_0_Item) FromIfBlockInput(v IfBlockInput) error {
+// FromIfBlock overwrites any union data inside the Test_Tasks_0_Item as the provided IfBlock
+func (t *Test_Tasks_0_Item) FromIfBlock(v IfBlock) error {
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeIfBlockInput performs a merge with any union data inside the TestInput_Tasks_0_Item, using the provided IfBlockInput
-func (t *TestInput_Tasks_0_Item) MergeIfBlockInput(v IfBlockInput) error {
+// MergeIfBlock performs a merge with any union data inside the Test_Tasks_0_Item, using the provided IfBlock
+func (t *Test_Tasks_0_Item) MergeIfBlock(v IfBlock) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -13907,22 +13909,22 @@ func (t *TestInput_Tasks_0_Item) MergeIfBlockInput(v IfBlockInput) error {
 	return err
 }
 
-// AsWhileBlockInput returns the union data inside the TestInput_Tasks_0_Item as a WhileBlockInput
-func (t TestInput_Tasks_0_Item) AsWhileBlockInput() (WhileBlockInput, error) {
-	var body WhileBlockInput
+// AsWhileBlock returns the union data inside the Test_Tasks_0_Item as a WhileBlock
+func (t Test_Tasks_0_Item) AsWhileBlock() (WhileBlock, error) {
+	var body WhileBlock
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromWhileBlockInput overwrites any union data inside the TestInput_Tasks_0_Item as the provided WhileBlockInput
-func (t *TestInput_Tasks_0_Item) FromWhileBlockInput(v WhileBlockInput) error {
+// FromWhileBlock overwrites any union data inside the Test_Tasks_0_Item as the provided WhileBlock
+func (t *Test_Tasks_0_Item) FromWhileBlock(v WhileBlock) error {
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeWhileBlockInput performs a merge with any union data inside the TestInput_Tasks_0_Item, using the provided WhileBlockInput
-func (t *TestInput_Tasks_0_Item) MergeWhileBlockInput(v WhileBlockInput) error {
+// MergeWhileBlock performs a merge with any union data inside the Test_Tasks_0_Item, using the provided WhileBlock
+func (t *Test_Tasks_0_Item) MergeWhileBlock(v WhileBlock) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -13933,32 +13935,32 @@ func (t *TestInput_Tasks_0_Item) MergeWhileBlockInput(v WhileBlockInput) error {
 	return err
 }
 
-func (t TestInput_Tasks_0_Item) MarshalJSON() ([]byte, error) {
+func (t Test_Tasks_0_Item) MarshalJSON() ([]byte, error) {
 	b, err := t.union.MarshalJSON()
 	return b, err
 }
 
-func (t *TestInput_Tasks_0_Item) UnmarshalJSON(b []byte) error {
+func (t *Test_Tasks_0_Item) UnmarshalJSON(b []byte) error {
 	err := t.union.UnmarshalJSON(b)
 	return err
 }
 
-// AsTestInputTasks0 returns the union data inside the TestInput_Tasks as a TestInputTasks0
-func (t TestInput_Tasks) AsTestInputTasks0() (TestInputTasks0, error) {
-	var body TestInputTasks0
+// AsTestTasks0 returns the union data inside the Test_Tasks as a TestTasks0
+func (t Test_Tasks) AsTestTasks0() (TestTasks0, error) {
+	var body TestTasks0
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromTestInputTasks0 overwrites any union data inside the TestInput_Tasks as the provided TestInputTasks0
-func (t *TestInput_Tasks) FromTestInputTasks0(v TestInputTasks0) error {
+// FromTestTasks0 overwrites any union data inside the Test_Tasks as the provided TestTasks0
+func (t *Test_Tasks) FromTestTasks0(v TestTasks0) error {
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeTestInputTasks0 performs a merge with any union data inside the TestInput_Tasks, using the provided TestInputTasks0
-func (t *TestInput_Tasks) MergeTestInputTasks0(v TestInputTasks0) error {
+// MergeTestTasks0 performs a merge with any union data inside the Test_Tasks, using the provided TestTasks0
+func (t *Test_Tasks) MergeTestTasks0(v TestTasks0) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -13969,22 +13971,22 @@ func (t *TestInput_Tasks) MergeTestInputTasks0(v TestInputTasks0) error {
 	return err
 }
 
-// AsTestInputTasks1 returns the union data inside the TestInput_Tasks as a TestInputTasks1
-func (t TestInput_Tasks) AsTestInputTasks1() (TestInputTasks1, error) {
-	var body TestInputTasks1
+// AsTestTasks1 returns the union data inside the Test_Tasks as a TestTasks1
+func (t Test_Tasks) AsTestTasks1() (TestTasks1, error) {
+	var body TestTasks1
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromTestInputTasks1 overwrites any union data inside the TestInput_Tasks as the provided TestInputTasks1
-func (t *TestInput_Tasks) FromTestInputTasks1(v TestInputTasks1) error {
+// FromTestTasks1 overwrites any union data inside the Test_Tasks as the provided TestTasks1
+func (t *Test_Tasks) FromTestTasks1(v TestTasks1) error {
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeTestInputTasks1 performs a merge with any union data inside the TestInput_Tasks, using the provided TestInputTasks1
-func (t *TestInput_Tasks) MergeTestInputTasks1(v TestInputTasks1) error {
+// MergeTestTasks1 performs a merge with any union data inside the Test_Tasks, using the provided TestTasks1
+func (t *Test_Tasks) MergeTestTasks1(v TestTasks1) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -13995,22 +13997,22 @@ func (t *TestInput_Tasks) MergeTestInputTasks1(v TestInputTasks1) error {
 	return err
 }
 
-// AsTestInputTasks2 returns the union data inside the TestInput_Tasks as a TestInputTasks2
-func (t TestInput_Tasks) AsTestInputTasks2() (TestInputTasks2, error) {
-	var body TestInputTasks2
+// AsTestTasks2 returns the union data inside the Test_Tasks as a TestTasks2
+func (t Test_Tasks) AsTestTasks2() (TestTasks2, error) {
+	var body TestTasks2
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromTestInputTasks2 overwrites any union data inside the TestInput_Tasks as the provided TestInputTasks2
-func (t *TestInput_Tasks) FromTestInputTasks2(v TestInputTasks2) error {
+// FromTestTasks2 overwrites any union data inside the Test_Tasks as the provided TestTasks2
+func (t *Test_Tasks) FromTestTasks2(v TestTasks2) error {
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeTestInputTasks2 performs a merge with any union data inside the TestInput_Tasks, using the provided TestInputTasks2
-func (t *TestInput_Tasks) MergeTestInputTasks2(v TestInputTasks2) error {
+// MergeTestTasks2 performs a merge with any union data inside the Test_Tasks, using the provided TestTasks2
+func (t *Test_Tasks) MergeTestTasks2(v TestTasks2) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -14021,188 +14023,12 @@ func (t *TestInput_Tasks) MergeTestInputTasks2(v TestInputTasks2) error {
 	return err
 }
 
-func (t TestInput_Tasks) MarshalJSON() ([]byte, error) {
+func (t Test_Tasks) MarshalJSON() ([]byte, error) {
 	b, err := t.union.MarshalJSON()
 	return b, err
 }
 
-func (t *TestInput_Tasks) UnmarshalJSON(b []byte) error {
-	err := t.union.UnmarshalJSON(b)
-	return err
-}
-
-// AsActionBlock returns the union data inside the TestOutput_Tasks_0_Item as a ActionBlock
-func (t TestOutput_Tasks_0_Item) AsActionBlock() (ActionBlock, error) {
-	var body ActionBlock
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromActionBlock overwrites any union data inside the TestOutput_Tasks_0_Item as the provided ActionBlock
-func (t *TestOutput_Tasks_0_Item) FromActionBlock(v ActionBlock) error {
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeActionBlock performs a merge with any union data inside the TestOutput_Tasks_0_Item, using the provided ActionBlock
-func (t *TestOutput_Tasks_0_Item) MergeActionBlock(v ActionBlock) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsIfBlockOutput returns the union data inside the TestOutput_Tasks_0_Item as a IfBlockOutput
-func (t TestOutput_Tasks_0_Item) AsIfBlockOutput() (IfBlockOutput, error) {
-	var body IfBlockOutput
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromIfBlockOutput overwrites any union data inside the TestOutput_Tasks_0_Item as the provided IfBlockOutput
-func (t *TestOutput_Tasks_0_Item) FromIfBlockOutput(v IfBlockOutput) error {
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeIfBlockOutput performs a merge with any union data inside the TestOutput_Tasks_0_Item, using the provided IfBlockOutput
-func (t *TestOutput_Tasks_0_Item) MergeIfBlockOutput(v IfBlockOutput) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsWhileBlockOutput returns the union data inside the TestOutput_Tasks_0_Item as a WhileBlockOutput
-func (t TestOutput_Tasks_0_Item) AsWhileBlockOutput() (WhileBlockOutput, error) {
-	var body WhileBlockOutput
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromWhileBlockOutput overwrites any union data inside the TestOutput_Tasks_0_Item as the provided WhileBlockOutput
-func (t *TestOutput_Tasks_0_Item) FromWhileBlockOutput(v WhileBlockOutput) error {
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeWhileBlockOutput performs a merge with any union data inside the TestOutput_Tasks_0_Item, using the provided WhileBlockOutput
-func (t *TestOutput_Tasks_0_Item) MergeWhileBlockOutput(v WhileBlockOutput) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-func (t TestOutput_Tasks_0_Item) MarshalJSON() ([]byte, error) {
-	b, err := t.union.MarshalJSON()
-	return b, err
-}
-
-func (t *TestOutput_Tasks_0_Item) UnmarshalJSON(b []byte) error {
-	err := t.union.UnmarshalJSON(b)
-	return err
-}
-
-// AsTestOutputTasks0 returns the union data inside the TestOutput_Tasks as a TestOutputTasks0
-func (t TestOutput_Tasks) AsTestOutputTasks0() (TestOutputTasks0, error) {
-	var body TestOutputTasks0
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromTestOutputTasks0 overwrites any union data inside the TestOutput_Tasks as the provided TestOutputTasks0
-func (t *TestOutput_Tasks) FromTestOutputTasks0(v TestOutputTasks0) error {
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeTestOutputTasks0 performs a merge with any union data inside the TestOutput_Tasks, using the provided TestOutputTasks0
-func (t *TestOutput_Tasks) MergeTestOutputTasks0(v TestOutputTasks0) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsTestOutputTasks1 returns the union data inside the TestOutput_Tasks as a TestOutputTasks1
-func (t TestOutput_Tasks) AsTestOutputTasks1() (TestOutputTasks1, error) {
-	var body TestOutputTasks1
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromTestOutputTasks1 overwrites any union data inside the TestOutput_Tasks as the provided TestOutputTasks1
-func (t *TestOutput_Tasks) FromTestOutputTasks1(v TestOutputTasks1) error {
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeTestOutputTasks1 performs a merge with any union data inside the TestOutput_Tasks, using the provided TestOutputTasks1
-func (t *TestOutput_Tasks) MergeTestOutputTasks1(v TestOutputTasks1) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsTestOutputTasks2 returns the union data inside the TestOutput_Tasks as a TestOutputTasks2
-func (t TestOutput_Tasks) AsTestOutputTasks2() (TestOutputTasks2, error) {
-	var body TestOutputTasks2
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromTestOutputTasks2 overwrites any union data inside the TestOutput_Tasks as the provided TestOutputTasks2
-func (t *TestOutput_Tasks) FromTestOutputTasks2(v TestOutputTasks2) error {
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeTestOutputTasks2 performs a merge with any union data inside the TestOutput_Tasks, using the provided TestOutputTasks2
-func (t *TestOutput_Tasks) MergeTestOutputTasks2(v TestOutputTasks2) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-func (t TestOutput_Tasks) MarshalJSON() ([]byte, error) {
-	b, err := t.union.MarshalJSON()
-	return b, err
-}
-
-func (t *TestOutput_Tasks) UnmarshalJSON(b []byte) error {
+func (t *Test_Tasks) UnmarshalJSON(b []byte) error {
 	err := t.union.UnmarshalJSON(b)
 	return err
 }
@@ -14269,22 +14095,22 @@ func (t *ValidationError_Loc_Item) UnmarshalJSON(b []byte) error {
 	return err
 }
 
-// AsActionBlock returns the union data inside the WhileBlockInput_Children_Item as a ActionBlock
-func (t WhileBlockInput_Children_Item) AsActionBlock() (ActionBlock, error) {
+// AsActionBlock returns the union data inside the WhileBlock_Children_Item as a ActionBlock
+func (t WhileBlock_Children_Item) AsActionBlock() (ActionBlock, error) {
 	var body ActionBlock
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromActionBlock overwrites any union data inside the WhileBlockInput_Children_Item as the provided ActionBlock
-func (t *WhileBlockInput_Children_Item) FromActionBlock(v ActionBlock) error {
+// FromActionBlock overwrites any union data inside the WhileBlock_Children_Item as the provided ActionBlock
+func (t *WhileBlock_Children_Item) FromActionBlock(v ActionBlock) error {
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeActionBlock performs a merge with any union data inside the WhileBlockInput_Children_Item, using the provided ActionBlock
-func (t *WhileBlockInput_Children_Item) MergeActionBlock(v ActionBlock) error {
+// MergeActionBlock performs a merge with any union data inside the WhileBlock_Children_Item, using the provided ActionBlock
+func (t *WhileBlock_Children_Item) MergeActionBlock(v ActionBlock) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -14295,22 +14121,22 @@ func (t *WhileBlockInput_Children_Item) MergeActionBlock(v ActionBlock) error {
 	return err
 }
 
-// AsIfBlockInput returns the union data inside the WhileBlockInput_Children_Item as a IfBlockInput
-func (t WhileBlockInput_Children_Item) AsIfBlockInput() (IfBlockInput, error) {
-	var body IfBlockInput
+// AsIfBlock returns the union data inside the WhileBlock_Children_Item as a IfBlock
+func (t WhileBlock_Children_Item) AsIfBlock() (IfBlock, error) {
+	var body IfBlock
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromIfBlockInput overwrites any union data inside the WhileBlockInput_Children_Item as the provided IfBlockInput
-func (t *WhileBlockInput_Children_Item) FromIfBlockInput(v IfBlockInput) error {
+// FromIfBlock overwrites any union data inside the WhileBlock_Children_Item as the provided IfBlock
+func (t *WhileBlock_Children_Item) FromIfBlock(v IfBlock) error {
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeIfBlockInput performs a merge with any union data inside the WhileBlockInput_Children_Item, using the provided IfBlockInput
-func (t *WhileBlockInput_Children_Item) MergeIfBlockInput(v IfBlockInput) error {
+// MergeIfBlock performs a merge with any union data inside the WhileBlock_Children_Item, using the provided IfBlock
+func (t *WhileBlock_Children_Item) MergeIfBlock(v IfBlock) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -14321,22 +14147,22 @@ func (t *WhileBlockInput_Children_Item) MergeIfBlockInput(v IfBlockInput) error 
 	return err
 }
 
-// AsWhileBlockInput returns the union data inside the WhileBlockInput_Children_Item as a WhileBlockInput
-func (t WhileBlockInput_Children_Item) AsWhileBlockInput() (WhileBlockInput, error) {
-	var body WhileBlockInput
+// AsWhileBlock returns the union data inside the WhileBlock_Children_Item as a WhileBlock
+func (t WhileBlock_Children_Item) AsWhileBlock() (WhileBlock, error) {
+	var body WhileBlock
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromWhileBlockInput overwrites any union data inside the WhileBlockInput_Children_Item as the provided WhileBlockInput
-func (t *WhileBlockInput_Children_Item) FromWhileBlockInput(v WhileBlockInput) error {
+// FromWhileBlock overwrites any union data inside the WhileBlock_Children_Item as the provided WhileBlock
+func (t *WhileBlock_Children_Item) FromWhileBlock(v WhileBlock) error {
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeWhileBlockInput performs a merge with any union data inside the WhileBlockInput_Children_Item, using the provided WhileBlockInput
-func (t *WhileBlockInput_Children_Item) MergeWhileBlockInput(v WhileBlockInput) error {
+// MergeWhileBlock performs a merge with any union data inside the WhileBlock_Children_Item, using the provided WhileBlock
+func (t *WhileBlock_Children_Item) MergeWhileBlock(v WhileBlock) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -14347,100 +14173,12 @@ func (t *WhileBlockInput_Children_Item) MergeWhileBlockInput(v WhileBlockInput) 
 	return err
 }
 
-func (t WhileBlockInput_Children_Item) MarshalJSON() ([]byte, error) {
+func (t WhileBlock_Children_Item) MarshalJSON() ([]byte, error) {
 	b, err := t.union.MarshalJSON()
 	return b, err
 }
 
-func (t *WhileBlockInput_Children_Item) UnmarshalJSON(b []byte) error {
-	err := t.union.UnmarshalJSON(b)
-	return err
-}
-
-// AsActionBlock returns the union data inside the WhileBlockOutput_Children_Item as a ActionBlock
-func (t WhileBlockOutput_Children_Item) AsActionBlock() (ActionBlock, error) {
-	var body ActionBlock
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromActionBlock overwrites any union data inside the WhileBlockOutput_Children_Item as the provided ActionBlock
-func (t *WhileBlockOutput_Children_Item) FromActionBlock(v ActionBlock) error {
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeActionBlock performs a merge with any union data inside the WhileBlockOutput_Children_Item, using the provided ActionBlock
-func (t *WhileBlockOutput_Children_Item) MergeActionBlock(v ActionBlock) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsIfBlockOutput returns the union data inside the WhileBlockOutput_Children_Item as a IfBlockOutput
-func (t WhileBlockOutput_Children_Item) AsIfBlockOutput() (IfBlockOutput, error) {
-	var body IfBlockOutput
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromIfBlockOutput overwrites any union data inside the WhileBlockOutput_Children_Item as the provided IfBlockOutput
-func (t *WhileBlockOutput_Children_Item) FromIfBlockOutput(v IfBlockOutput) error {
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeIfBlockOutput performs a merge with any union data inside the WhileBlockOutput_Children_Item, using the provided IfBlockOutput
-func (t *WhileBlockOutput_Children_Item) MergeIfBlockOutput(v IfBlockOutput) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsWhileBlockOutput returns the union data inside the WhileBlockOutput_Children_Item as a WhileBlockOutput
-func (t WhileBlockOutput_Children_Item) AsWhileBlockOutput() (WhileBlockOutput, error) {
-	var body WhileBlockOutput
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromWhileBlockOutput overwrites any union data inside the WhileBlockOutput_Children_Item as the provided WhileBlockOutput
-func (t *WhileBlockOutput_Children_Item) FromWhileBlockOutput(v WhileBlockOutput) error {
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeWhileBlockOutput performs a merge with any union data inside the WhileBlockOutput_Children_Item, using the provided WhileBlockOutput
-func (t *WhileBlockOutput_Children_Item) MergeWhileBlockOutput(v WhileBlockOutput) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-func (t WhileBlockOutput_Children_Item) MarshalJSON() ([]byte, error) {
-	b, err := t.union.MarshalJSON()
-	return b, err
-}
-
-func (t *WhileBlockOutput_Children_Item) UnmarshalJSON(b []byte) error {
+func (t *WhileBlock_Children_Item) UnmarshalJSON(b []byte) error {
 	err := t.union.UnmarshalJSON(b)
 	return err
 }
