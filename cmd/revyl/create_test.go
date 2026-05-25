@@ -17,9 +17,9 @@ func TestCreateRemoteTest_UsesProjectOrgIDAndPreservesRequestFields(t *testing.T
 
 	tasks := []interface{}{
 		map[string]interface{}{
-			"type":             "module_import",
-			"step_description": "Login module",
-			"module_id":        "mod-1",
+			"type":      "module_import",
+			"module":    "Login module",
+			"module_id": "mod-1",
 		},
 	}
 

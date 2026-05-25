@@ -36,13 +36,14 @@ func resolveModuleNameOrID(cmd *cobra.Command, client *api.Client, nameOrID stri
 		return "", "", fmt.Errorf("failed to list modules: %w", err)
 	}
 
+	needle := strings.TrimSpace(nameOrID)
 	for _, m := range listResp.Result {
-		if strings.EqualFold(m.Name, nameOrID) {
+		if strings.TrimSpace(m.Name) == needle {
 			return m.ID, m.Name, nil
 		}
 	}
 
-	return "", "", fmt.Errorf("module \"%s\" not found", nameOrID)
+	return "", "", fmt.Errorf("module %q not found; use an exact module name or UUID", nameOrID)
 }
 
 // runModuleList handles the module list command.
@@ -214,6 +215,8 @@ func runModuleGet(cmd *cobra.Command, args []string) error {
 
 // runModuleCreate handles the module create command.
 func runModuleCreate(cmd *cobra.Command, args []string) error {
+	cmd.SilenceUsage = true
+
 	moduleName := args[0]
 
 	// Validate module name
@@ -608,7 +611,7 @@ func runModuleInsert(cmd *cobra.Command, args []string) error {
 	devMode, _ := cmd.Flags().GetBool("dev")
 	client := api.NewClientWithDevMode(apiKey, devMode)
 
-	moduleID, moduleName, err := resolveModuleNameOrID(cmd, client, nameOrID)
+	_, moduleName, err := resolveModuleNameOrID(cmd, client, nameOrID)
 	if err != nil {
 		ui.PrintError("%v", err)
 		return err
@@ -618,9 +621,8 @@ func runModuleInsert(cmd *cobra.Command, args []string) error {
 	jsonOutput, _ := cmd.Root().PersistentFlags().GetBool("json")
 	if jsonOutput {
 		data, _ := json.MarshalIndent(map[string]string{
-			"type":             "module_import",
-			"step_description": moduleName,
-			"module_id":        moduleID,
+			"type":   "module_import",
+			"module": moduleName,
 		}, "", "  ")
 		fmt.Println(string(data))
 		return nil
@@ -628,8 +630,7 @@ func runModuleInsert(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("# Paste this into your test YAML:")
 	fmt.Printf("- type: module_import\n")
-	fmt.Printf("  step_description: \"%s\"\n", moduleName)
-	fmt.Printf("  module_id: \"%s\"\n", moduleID)
+	fmt.Printf("  module: \"%s\"\n", moduleName)
 
 	return nil
 }

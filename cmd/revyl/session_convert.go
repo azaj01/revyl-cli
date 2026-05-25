@@ -375,10 +375,6 @@ func normalizeCompiledBlockForCreate(block map[string]interface{}) map[string]in
 		out["type"] = "instructions"
 	}
 
-	if _, ok := out["step_description"].(string); !ok {
-		out["step_description"] = ""
-	}
-
 	return out
 }
 

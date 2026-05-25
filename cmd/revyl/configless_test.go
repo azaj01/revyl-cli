@@ -83,6 +83,9 @@ func TestRunTestsPush_BootstrapsConfigWithoutProjectConfig(t *testing.T) {
 		case "/api/v1/modules/list":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"message":"ok","result":[]}`))
+		case "/api/v1/tests/yaml/validate-yaml":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"is_valid":true,"validation_type":"full_test","errors":0,"warnings":0,"messages":[]}`))
 		default:
 			t.Fatalf("unexpected request: %s", r.URL.Path)
 		}
@@ -138,6 +141,66 @@ func TestRunTestsPush_BootstrapsConfigWithoutProjectConfig(t *testing.T) {
 	}
 	if got := createReq["org_id"]; got != "org-live" {
 		t.Fatalf("org_id = %v, want org-live", got)
+	}
+}
+
+func TestRunTestsPush_StopsWhenBackendYAMLValidationFails(t *testing.T) {
+	t.Setenv("REVYL_API_KEY", "test-key")
+	testutil.SetHomeDir(t, t.TempDir())
+
+	createCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/tests/yaml/validate-yaml":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"is_valid": false,
+				"validation_type": "full_test",
+				"errors": 1,
+				"warnings": 0,
+				"messages": [{
+					"severity": "error",
+					"code": "SCRIPT_NOT_FOUND",
+					"message": "Script 'Missing script' was not found in this organization.",
+					"field_path": "test.blocks[0].script",
+					"line": 9,
+					"suggestion": "Create the resource first or use an existing exact name."
+				}]
+			}`))
+		case "/api/v1/tests/create":
+			createCalled = true
+			t.Fatalf("create should not be called after validation failure")
+		default:
+			t.Fatalf("unexpected request: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	t.Setenv("REVYL_BACKEND_URL", server.URL)
+
+	tmp := t.TempDir()
+	withWorkingDir(t, tmp)
+	testsDir := filepath.Join(tmp, ".revyl", "tests")
+	if err := os.MkdirAll(testsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	testName := "missing-script"
+	writeConfiglessLocalYAML(t, filepath.Join(testsDir, testName+".yaml"), testName, "ios-test")
+
+	originalPushDryRun := testsPushDryRun
+	originalTestsForce := testsForce
+	t.Cleanup(func() {
+		testsPushDryRun = originalPushDryRun
+		testsForce = originalTestsForce
+	})
+	testsPushDryRun = false
+	testsForce = false
+
+	cmd := newLeafCommand("push", runTestsPush)
+	if err := runTestsPush(cmd, []string{testName}); err == nil {
+		t.Fatal("runTestsPush() error = nil, want validation failure")
+	}
+	if createCalled {
+		t.Fatal("create was called after validation failure")
 	}
 }
 

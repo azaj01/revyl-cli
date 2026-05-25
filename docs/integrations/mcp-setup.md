@@ -277,7 +277,6 @@ The Revyl MCP server exposes tools across the following categories. Device actio
 | `list_remote_tests` | List all tests in the organization |
 | `get_test_status` | Get the status of a running or completed test |
 | `cancel_test` | Cancel a running test by task ID |
-| `validate_yaml` | Validate YAML test syntax without creating |
 | `get_schema` | Get the CLI command and YAML test schema |
 
 ### Workflow Management

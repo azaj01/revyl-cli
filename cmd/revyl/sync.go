@@ -1295,11 +1295,18 @@ func pullSingleTest(ctx context.Context, client *api.Client, cfg *config.Project
 }
 
 func pushSingleTest(ctx context.Context, client *api.Client, cfg *config.ProjectConfig, testsDir, testName string) error {
-	localTests, err := config.LoadLocalTests(testsDir)
+	testPath := filepath.Join(testsDir, testName+".yaml")
+	result, err := validateYAMLFileWithBackend(ctx, client, testPath)
 	if err != nil {
 		return err
 	}
-	if err := validateTestsForPush([]string{testName}, testsDir, localTests); err != nil {
+	printBackendYAMLDiagnostics(testPath, result)
+	if !result.IsValid {
+		return fmt.Errorf("YAML validation failed")
+	}
+
+	localTests, err := config.LoadLocalTests(testsDir)
+	if err != nil {
 		return err
 	}
 	resolver := syncpkg.NewResolver(client, cfg, localTests)

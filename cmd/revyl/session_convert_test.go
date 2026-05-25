@@ -142,3 +142,19 @@ func containsAll(haystack string, needles ...string) bool {
 	}
 	return true
 }
+
+func TestNormalizeCompiledBlockForCreateDoesNotInjectBlankStepDescription(t *testing.T) {
+	cases := []map[string]interface{}{
+		{"type": "module_import", "module": "Login Flow"},
+		{"type": "code_execution", "script": "Seed User"},
+		{"type": "manual", "step_type": "open_app"},
+		{"type": "manual", "step_type": "download_file", "file": "fixture.json"},
+	}
+
+	for _, tc := range cases {
+		got := normalizeCompiledBlockForCreate(tc)
+		if _, ok := got["step_description"]; ok {
+			t.Fatalf("normalizeCompiledBlockForCreate(%#v) injected step_description: %#v", tc, got)
+		}
+	}
+}

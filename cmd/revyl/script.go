@@ -179,13 +179,14 @@ func resolveScriptNameOrID(cmd *cobra.Command, client *api.Client, nameOrID stri
 		return "", "", fmt.Errorf("failed to list scripts: %w", err)
 	}
 
+	needle := strings.TrimSpace(nameOrID)
 	for _, s := range listResp.Scripts {
-		if strings.EqualFold(s.Name, nameOrID) {
+		if strings.TrimSpace(s.Name) == needle {
 			return s.ID, s.Name, nil
 		}
 	}
 
-	return "", "", fmt.Errorf("script \"%s\" not found", nameOrID)
+	return "", "", fmt.Errorf("script %q not found; use an exact script name or UUID", nameOrID)
 }
 
 func runScriptList(cmd *cobra.Command, _ []string) error {
@@ -291,6 +292,8 @@ func runScriptGet(cmd *cobra.Command, args []string) error {
 }
 
 func runScriptCreate(cmd *cobra.Command, args []string) error {
+	cmd.SilenceUsage = true
+
 	code, err := os.ReadFile(scriptCreateFromFile)
 	if err != nil {
 		ui.PrintError("Failed to read file: %v", err)
@@ -480,7 +483,7 @@ func runScriptInsert(cmd *cobra.Command, args []string) error {
 	devMode, _ := cmd.Flags().GetBool("dev")
 	client := api.NewClientWithDevMode(apiKey, devMode)
 
-	scriptID, scriptName, err := resolveScriptNameOrID(cmd, client, args[0])
+	_, scriptName, err := resolveScriptNameOrID(cmd, client, args[0])
 	if err != nil {
 		ui.PrintError("%v", err)
 		return err
@@ -488,8 +491,7 @@ func runScriptInsert(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("# Paste this into your test YAML:")
 	fmt.Printf("- type: code_execution\n")
-	fmt.Printf("  step_description: \"%s\"\n", scriptID)
-	fmt.Printf("  # script: %s\n", scriptName)
+	fmt.Printf("  script: \"%s\"\n", scriptName)
 
 	return nil
 }

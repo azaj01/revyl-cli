@@ -26,7 +26,6 @@ COMMANDS:
   pull      - Pull remote test changes to local
   diff      - Show diff between local and remote
   rename    - Rename a test while preserving history
-  validate  - Validate YAML test files
   run       - Run a test (optionally with --build)
   cancel    - Cancel a running test
   create    - Create a new test
@@ -175,10 +174,10 @@ func init() {
 	// Add management subcommands
 	testCmd.AddCommand(testsListCmd)
 	testCmd.AddCommand(testsRemoteCmd)
-	testCmd.AddCommand(testsValidateCmd)
 	testCmd.AddCommand(testsPushCmd)
 	testCmd.AddCommand(testsPullCmd)
 	testCmd.AddCommand(testsDiffCmd)
+	testCmd.AddCommand(testValidateCmd)
 	// Add action subcommands (noun-first)
 	testCmd.AddCommand(testRunCmd)
 	testCmd.AddCommand(testCancelCmd)

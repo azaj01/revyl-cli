@@ -136,7 +136,7 @@ revyl test push --dry-run         # Preview what would be pushed
 
 When pushing, the CLI:
 
-1. Validates the local YAML.
+1. Checks changed local YAML with backend validation.
 2. Resolves `build.name` to an `app_id` and any module/script names to UUIDs.
 3. Sends the blocks to the server with an `expected_version` for optimistic concurrency.
 4. If the remote version has advanced (HTTP 409 conflict), the push is rejected. Use `--force` to overwrite, or pull first and re-push.
@@ -325,7 +325,6 @@ revyl sync --tests --prune
 | Test shows as `orphaned` | The remote test was deleted or you lost access. Run `revyl sync --prune` to detach the link. |
 | "test not found" on pull | The test name doesn't match any remote test. Run `revyl test remote` to see available tests. |
 | Stale `_meta` after cloning | Run `revyl sync --bootstrap` to rebuild config mappings from local `_meta.remote_id` values. |
-| Push rejected with invalid YAML | Run `revyl test validate .revyl/tests/<name>.yaml` to check syntax before pushing. |
 | Sync imports too many tests | Use `--skip-import` to only sync tests already in `.revyl/tests/`, or `--workflow "Name"` to scope to one workflow. |
 
 ---

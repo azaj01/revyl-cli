@@ -61,7 +61,6 @@ Test management:
   - create_test: Create a runnable test from YAML content and/or module refs
   - update_test: Push updated YAML content to an existing test
   - delete_test: Delete a test by name or UUID
-  - validate_yaml: Validate YAML test syntax without creating
 
 Workflow management:
   - list_workflows: List all workflows in the organization

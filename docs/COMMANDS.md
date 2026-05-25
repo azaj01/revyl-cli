@@ -373,7 +373,6 @@ revyl test remote                 # List all tests in your organization
 revyl test push                   # Push local changes to remote
 revyl test pull                   # Pull remote changes to local
 revyl test diff login-flow        # Show diff between local and remote
-revyl test validate test.yaml     # Validate YAML syntax (--json for CI)
 
 # Execution status & reports
 revyl test status login-flow                       # Latest execution status

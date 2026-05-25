@@ -99,6 +99,11 @@ Execute a system-level action.
   step_type: set_appearance
   step_description: "dark"  # light or dark
 
+# Set device orientation
+- type: manual
+  step_type: set_orientation
+  step_description: "landscape"  # portrait or landscape
+
 # Download a file onto the device (URL)
 - type: manual
   step_type: download_file
@@ -108,6 +113,10 @@ Execute a system-level action.
 - type: manual
   step_type: download_file
   file: "staging-cert.pem"
+
+# End the test early
+- type: manual
+  step_type: end
 ` + "```" + `
 
 ### 5. if (Conditional)
@@ -138,16 +147,16 @@ Repeat blocks while condition is true.
 ` + "```" + `
 
 ### 7. code_execution
-Execute a server-side script.
+Execute a server-side script by org-unique script name.
 
 ` + "```yaml" + `
 - type: code_execution
-  step_description: "script-uuid-here"
+  script: "Seed User"
   variable_name: "result"  # Optional: store result in variable
 ` + "```" + `
 
 ### 8. module_import
-Import a reusable module (group of blocks) by its UUID.
+Import a reusable module (group of blocks) by org-unique module name.
 
 Modules are reusable building blocks created via the app UI or CLI.
 When a test runs, module_import blocks are expanded into the module's
@@ -155,11 +164,10 @@ constituent blocks at execution time.
 
 ` + "```yaml" + `
 - type: module_import
-  step_description: "Login Flow"     # Module name (for readability)
-  module_id: "abc-123-uuid"          # Required: Module UUID
+  module: "Login Flow"
 ` + "```" + `
 
-Use ` + "`revyl module list`" + ` to find available modules and their IDs,
+Use ` + "`revyl module list`" + ` to find available modules,
 or ` + "`revyl module insert <name>`" + ` to generate a ready-to-paste snippet.
 
 ## Variable System
@@ -312,7 +320,7 @@ func YAMLTestSchemaJSON() map[string]interface{} {
 		"criticalBehavior": map[string]interface{}{
 			"autoAppOpen":        true,
 			"supportedPlatforms": []string{"ios", "android"},
-			"manualStepsOnlyFor": []string{"navigate", "open_app", "kill_app", "go_home", "wait", "set_location", "set_orientation", "set_appearance", "download_file"},
+			"manualStepsOnlyFor": []string{"navigate", "open_app", "kill_app", "go_home", "wait", "set_location", "set_orientation", "set_appearance", "download_file", "end"},
 		},
 		"blockTypes": map[string]interface{}{
 			"instructions": map[string]interface{}{
@@ -344,7 +352,7 @@ func YAMLTestSchemaJSON() map[string]interface{} {
 					"step_type":        "enum (required)",
 					"step_description": "string (optional, depends on step_type)",
 				},
-				"stepTypes": []string{"wait", "open_app", "kill_app", "go_home", "navigate", "set_location", "set_orientation", "set_appearance", "download_file"},
+				"stepTypes": []string{"wait", "open_app", "kill_app", "go_home", "navigate", "set_location", "set_orientation", "set_appearance", "download_file", "end"},
 				"stepDescriptionFormats": map[string]string{
 					"wait":            "Number of seconds (e.g., '3')",
 					"open_app":        "Bundle ID for system apps, or omit for installed app",
@@ -355,6 +363,7 @@ func YAMLTestSchemaJSON() map[string]interface{} {
 					"set_orientation": "portrait or landscape",
 					"set_appearance":  "light or dark",
 					"download_file":   "URL or revyl-file:// URI, or use 'file' field with org file name",
+					"end":             "Not used",
 				},
 			},
 			"if": map[string]interface{}{
@@ -377,17 +386,16 @@ func YAMLTestSchemaJSON() map[string]interface{} {
 			"code_execution": map[string]interface{}{
 				"description": "Execute a server-side script",
 				"fields": map[string]string{
-					"type":             "code_execution",
-					"step_description": "string (script UUID, required)",
-					"variable_name":    "string (optional)",
+					"type":          "code_execution",
+					"script":        "string (script name)",
+					"variable_name": "string (optional)",
 				},
 			},
 			"module_import": map[string]interface{}{
-				"description": "Import a reusable module (group of blocks) by UUID",
+				"description": "Import a reusable module (group of blocks) by name",
 				"fields": map[string]string{
-					"type":             "module_import",
-					"step_description": "string (module name, for readability)",
-					"module_id":        "string (module UUID, required)",
+					"type":   "module_import",
+					"module": "string (module name)",
 				},
 			},
 		},

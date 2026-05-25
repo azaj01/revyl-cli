@@ -44,7 +44,6 @@ Short deterministic burst allowance:
 When a flow succeeds:
 1. capture test name, preconditions, instructions, validations, variables.
 2. run:
-   - `validate_yaml(content="...")`
    - `create_test(name="...", platform="ios", yaml_content="...")`
    - `run_test(test_name="...")`
    - `get_test_status(task_id="...")`

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -17,20 +16,18 @@ import (
 	"github.com/revyl/cli/internal/sync"
 	"github.com/revyl/cli/internal/ui"
 	"github.com/revyl/cli/internal/util"
-	"github.com/revyl/cli/internal/yaml"
 )
 
 var (
-	testsForce         bool
-	testsLimit         int
-	testsPlatform      string
-	testsTag           string
-	validateOutputJSON bool
-	testsListJSON      bool
-	testsRemoteJSON    bool
-	testsPushDryRun    bool
-	testsPullDryRun    bool
-	testsPullAll       bool
+	testsForce      bool
+	testsLimit      int
+	testsPlatform   string
+	testsTag        string
+	testsListJSON   bool
+	testsRemoteJSON bool
+	testsPushDryRun bool
+	testsPullDryRun bool
+	testsPullAll    bool
 
 	testDuplicateName  string
 	testRestoreVersion int
@@ -51,8 +48,6 @@ func init() {
 	testsRemoteCmd.Flags().BoolVar(&testsRemoteJSON, "json", false, "Output results as JSON")
 
 	testsListCmd.Flags().BoolVar(&testsListJSON, "json", false, "Output results as JSON")
-
-	testsValidateCmd.Flags().BoolVar(&validateOutputJSON, "json", false, "Output results as JSON")
 
 	testDuplicateCmd.Flags().StringVar(&testDuplicateName, "name", "", "Name for the duplicated test")
 
@@ -147,36 +142,6 @@ Examples:
   revyl test remote --platform ios   # Filter by platform
   revyl test remote --tag regression # Filter by tag`,
 	RunE: runTestsRemote,
-}
-
-// testsValidateCmd validates YAML test files.
-var testsValidateCmd = &cobra.Command{
-	Use:   "validate <file> [files...]",
-	Short: "Validate YAML test files (dry-run)",
-	Long: `Validate YAML test files without creating or running them.
-
-This command checks the YAML syntax and schema compliance, reporting
-any errors or warnings. Use this to verify test files before committing
-or running them.
-
-VALIDATES:
-  - YAML syntax
-  - Required fields (name, platform, build.name, blocks)
-  - Block type validity (instructions, validation, extraction, manual, if, while, code_execution)
-  - Manual step_type validity (wait, open_app, kill_app, go_home, navigate, set_location)
-  - Variable definitions before use ({{variable-name}} syntax)
-  - Platform values (ios/android only)
-
-EXIT CODES:
-  0 - All files valid
-  1 - One or more files invalid
-
-EXAMPLES:
-  revyl test validate test.yaml           # Validate single file
-  revyl test validate tests/*.yaml        # Validate multiple files
-  revyl test validate --json test.yaml  # JSON output for CI/CD`,
-	Args: cobra.MinimumNArgs(1),
-	RunE: runTestsValidate,
 }
 
 // runTestsList lists tests with sync status.
@@ -382,16 +347,18 @@ func runTestsPush(cmd *cobra.Command, args []string) error {
 
 	testsToValidate := make([]string, 0)
 	if testName != "" {
-		testsToValidate = append(testsToValidate, testName)
+		if _, ok := localTests[testName]; !ok {
+			return fmt.Errorf("test not found: %s", testName)
+		}
+		testsToValidate = append(testsToValidate, filepath.Join(testsDir, testName+".yaml"))
 	} else {
 		for _, s := range statuses {
 			if s.Status == sync.StatusModified || s.Status == sync.StatusLocalOnly {
-				testsToValidate = append(testsToValidate, s.Name)
+				testsToValidate = append(testsToValidate, filepath.Join(testsDir, s.Name+".yaml"))
 			}
 		}
 	}
-
-	if err := validateTestsForPush(testsToValidate, testsDir, localTests); err != nil {
+	if err := validateYAMLFilesWithBackend(cmd, testsToValidate); err != nil {
 		return err
 	}
 
@@ -428,47 +395,6 @@ func runTestsPush(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	return nil
-}
-
-func validateTestsForPush(testNames []string, testsDir string, localTests map[string]*config.LocalTest) error {
-	testsToValidate := make([]string, 0, len(testNames))
-	for _, name := range testNames {
-		if _, ok := localTests[name]; !ok {
-			return fmt.Errorf("test not found: %s", name)
-		}
-		testsToValidate = append(testsToValidate, name)
-	}
-	sort.Strings(testsToValidate)
-
-	hasErrors := false
-	for _, name := range testsToValidate {
-		testPath := filepath.Join(testsDir, name+".yaml")
-		result, err := yaml.ValidateYAMLFile(testPath)
-		if err != nil {
-			hasErrors = true
-			ui.PrintError("%s: failed to read YAML file: %v", name, err)
-			continue
-		}
-
-		for _, warning := range result.Warnings {
-			ui.PrintWarning("%s: %s", name, warning)
-		}
-
-		if result.Valid {
-			continue
-		}
-
-		hasErrors = true
-		ui.PrintError("%s: YAML validation failed:", name)
-		for _, validationErr := range result.Errors {
-			ui.PrintError("  %s", validationErr)
-		}
-	}
-
-	if hasErrors {
-		return fmt.Errorf("push aborted: one or more tests have invalid YAML")
-	}
 	return nil
 }
 
@@ -917,85 +843,6 @@ func runTestsRemoteWithTags(cmd *cobra.Command, client *api.Client, jsonOutput b
 		{Label: "List all tags:", Command: "revyl tag list"},
 	})
 
-	return nil
-}
-
-// runTestsValidate validates YAML test files.
-//
-// Parameters:
-//   - cmd: The cobra command being executed
-//   - args: File paths to validate
-//
-// Returns:
-//   - error: Returns error if any file is invalid
-func runTestsValidate(cmd *cobra.Command, args []string) error {
-	// Check if --json flag is set (either local or global)
-	jsonOutput := validateOutputJSON
-	if globalJSON, _ := cmd.Root().PersistentFlags().GetBool("json"); globalJSON {
-		jsonOutput = true
-	}
-
-	allValid := true
-	var results []map[string]interface{}
-
-	for _, file := range args {
-		result, err := yaml.ValidateYAMLFile(file)
-		if err != nil {
-			if jsonOutput {
-				results = append(results, map[string]interface{}{
-					"file":  file,
-					"valid": false,
-					"error": err.Error(),
-				})
-			} else {
-				ui.PrintError("%s: %v", file, err)
-			}
-			allValid = false
-			continue
-		}
-
-		if jsonOutput {
-			resultMap := map[string]interface{}{
-				"file":  file,
-				"valid": result.Valid,
-			}
-			if len(result.Errors) > 0 {
-				resultMap["errors"] = result.Errors
-			}
-			if len(result.Warnings) > 0 {
-				resultMap["warnings"] = result.Warnings
-			}
-			results = append(results, resultMap)
-		} else {
-			if result.Valid {
-				ui.PrintSuccess("%s: Valid", file)
-				for _, w := range result.Warnings {
-					ui.PrintWarning("  Warning: %s", w)
-				}
-			} else {
-				ui.PrintError("%s: Invalid", file)
-				for _, e := range result.Errors {
-					ui.PrintError("  %s", e)
-				}
-				for _, w := range result.Warnings {
-					ui.PrintWarning("  Warning: %s", w)
-				}
-			}
-		}
-
-		if !result.Valid {
-			allValid = false
-		}
-	}
-
-	if jsonOutput {
-		data, _ := json.MarshalIndent(results, "", "  ")
-		fmt.Println(string(data))
-	}
-
-	if !allValid {
-		return fmt.Errorf("validation failed")
-	}
 	return nil
 }
 

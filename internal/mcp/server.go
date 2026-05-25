@@ -30,7 +30,6 @@ import (
 	"github.com/revyl/cli/internal/schema"
 	"github.com/revyl/cli/internal/sse"
 	"github.com/revyl/cli/internal/ui"
-	"github.com/revyl/cli/internal/yaml"
 )
 
 // Server wraps the MCP server with Revyl-specific functionality.
@@ -157,7 +156,7 @@ func NewServer(version string, devMode bool, opts ...ServerOption) (*Server, err
 ### Test Management
 - **Run & Monitor**: run_test, get_test_status, cancel_test
 - **CRUD**: create_test, update_test, delete_test, list_tests, list_remote_tests
-- **Validation**: validate_yaml, get_schema (YAML format reference)
+- **Reference**: get_schema (YAML format reference)
 - **Editor**: open_test_editor (with optional hot reload), stop_hot_reload, hot_reload_status
 
 ### Workflow Management
@@ -200,8 +199,7 @@ func NewServer(version string, devMode bool, opts ...ServerOption) (*Server, err
 
 1. get_schema() -- get the YAML format reference
 2. create_test(name="...", platform="...", yaml_content="...", module_names_or_ids=[...]) -- create a runnable test
-3. validate_yaml(yaml_content="...") -- check syntax before running
-4. run_test(test_name="...") -- execute and get results with viewer_url
+3. run_test(test_name="...") -- execute and get results with viewer_url
 
 ## Multi-Session Support
 
@@ -359,16 +357,6 @@ RECOMMENDED: Before creating a test, read the app's source code (screens, compon
 			Title: "Create Workflow",
 		},
 	}, s.handleCreateWorkflow)
-
-	// NEW: validate_yaml tool
-	mcp.AddTool(s.mcpServer, &mcp.Tool{
-		Name:        "validate_yaml",
-		Description: "Validate YAML test syntax without creating or running. Returns validation errors/warnings.",
-		Annotations: &mcp.ToolAnnotations{
-			Title:        "Validate YAML",
-			ReadOnlyHint: true,
-		},
-	}, s.handleValidateYAML)
 
 	// NEW: get_schema tool
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
@@ -1427,28 +1415,6 @@ func (s *Server) handleCreateWorkflow(ctx context.Context, req *mcp.CallToolRequ
 	}, nil
 }
 
-// ValidateYAMLInput defines input for validate_yaml tool.
-type ValidateYAMLInput struct {
-	Content string `json:"content" jsonschema:"YAML test content to validate"`
-}
-
-// ValidateYAMLOutput defines output for validate_yaml tool.
-type ValidateYAMLOutput struct {
-	Valid    bool     `json:"valid"`
-	Errors   []string `json:"errors,omitempty"`
-	Warnings []string `json:"warnings,omitempty"`
-}
-
-// handleValidateYAML handles the validate_yaml tool call.
-func (s *Server) handleValidateYAML(ctx context.Context, req *mcp.CallToolRequest, input ValidateYAMLInput) (*mcp.CallToolResult, ValidateYAMLOutput, error) {
-	result := yaml.ValidateYAML(input.Content)
-	return nil, ValidateYAMLOutput{
-		Valid:    result.Valid,
-		Errors:   result.Errors,
-		Warnings: result.Warnings,
-	}, nil
-}
-
 // GetSchemaInput defines input for get_schema tool.
 type GetSchemaInput struct {
 	Format string `json:"format,omitempty" jsonschema:"Output format: json (default), markdown, or llm"`
@@ -2265,8 +2231,9 @@ func (s *Server) handleInsertModuleBlock(ctx context.Context, req *mcp.CallToolR
 			return nil, InsertModuleBlockOutput{Success: false, Error: fmt.Sprintf("failed to list modules: %v", err)}, nil
 		}
 
+		needle := strings.TrimSpace(input.ModuleNameOrID)
 		for _, m := range listResp.Result {
-			if strings.EqualFold(m.Name, input.ModuleNameOrID) {
+			if strings.TrimSpace(m.Name) == needle {
 				moduleID = m.ID
 				moduleName = m.Name
 				break
@@ -2275,18 +2242,17 @@ func (s *Server) handleInsertModuleBlock(ctx context.Context, req *mcp.CallToolR
 	}
 
 	if moduleID == "" {
-		return nil, InsertModuleBlockOutput{Success: false, Error: fmt.Sprintf("module '%s' not found", input.ModuleNameOrID)}, nil
+		return nil, InsertModuleBlockOutput{Success: false, Error: fmt.Sprintf("module %q not found; use an exact module name or UUID", input.ModuleNameOrID)}, nil
 	}
 
-	yamlSnippet := fmt.Sprintf("- type: module_import\n  step_description: \"%s\"\n  module_id: \"%s\"", moduleName, moduleID)
+	yamlSnippet := fmt.Sprintf("- type: module_import\n  module: \"%s\"", moduleName)
 
 	return nil, InsertModuleBlockOutput{
-		Success:         true,
-		YAMLSnippet:     yamlSnippet,
-		ModuleID:        moduleID,
-		ModuleName:      moduleName,
-		BlockType:       "module_import",
-		StepDescription: moduleName,
+		Success:     true,
+		YAMLSnippet: yamlSnippet,
+		ModuleID:    moduleID,
+		ModuleName:  moduleName,
+		BlockType:   "module_import",
 	}, nil
 }
 
@@ -3691,15 +3657,6 @@ func (s *Server) handleUpdateTest(ctx context.Context, req *mcp.CallToolRequest,
 		return nil, UpdateTestOutput{Success: false, Error: mismatchMsg}, nil
 	}
 
-	// Validate YAML
-	validationResult := yaml.ValidateYAML(input.YAMLContent)
-	if !validationResult.Valid {
-		return nil, UpdateTestOutput{
-			Success: false,
-			Error:   fmt.Sprintf("YAML validation failed: %v", validationResult.Errors),
-		}, nil
-	}
-
 	// Resolve test name to ID
 	testID, err := s.resolveTestID(ctx, input.TestNameOrID)
 	if err != nil {
@@ -3707,7 +3664,7 @@ func (s *Server) handleUpdateTest(ctx context.Context, req *mcp.CallToolRequest,
 	}
 
 	// Parse YAML to extract blocks
-	var testDef yaml.TestDefinition
+	var testDef config.LocalTest
 	if parseErr := yamlPkg.Unmarshal([]byte(input.YAMLContent), &testDef); parseErr != nil {
 		return nil, UpdateTestOutput{
 			Success: false,
@@ -3994,7 +3951,7 @@ func (s *Server) handleDeleteScript(ctx context.Context, req *mcp.CallToolReques
 
 // InsertScriptBlockInput defines input for insert_script_block tool.
 type InsertScriptBlockInput struct {
-	ScriptNameOrID string `json:"script_name_or_id" jsonschema:"Script name or UUID to generate the code_execution block for"`
+	ScriptNameOrID string `json:"script_name_or_id" jsonschema:"Script name or UUID to look up; generated YAML uses canonical script: <name>"`
 	VariableName   string `json:"variable_name,omitempty" jsonschema:"Optional variable name to store the script output"`
 }
 
@@ -4034,8 +3991,9 @@ func (s *Server) handleInsertScriptBlock(ctx context.Context, req *mcp.CallToolR
 			return nil, InsertScriptBlockOutput{Success: false, Error: fmt.Sprintf("failed to list scripts: %v", err)}, nil
 		}
 
+		needle := strings.TrimSpace(input.ScriptNameOrID)
 		for _, sc := range listResp.Scripts {
-			if strings.EqualFold(sc.Name, input.ScriptNameOrID) {
+			if strings.TrimSpace(sc.Name) == needle {
 				scriptID = sc.ID
 				scriptName = sc.Name
 				break
@@ -4044,24 +4002,23 @@ func (s *Server) handleInsertScriptBlock(ctx context.Context, req *mcp.CallToolR
 	}
 
 	if scriptID == "" {
-		return nil, InsertScriptBlockOutput{Success: false, Error: fmt.Sprintf("script '%s' not found", input.ScriptNameOrID)}, nil
+		return nil, InsertScriptBlockOutput{Success: false, Error: fmt.Sprintf("script %q not found; use an exact script name or UUID", input.ScriptNameOrID)}, nil
 	}
 
 	// Generate YAML snippet
 	var yamlSnippet string
 	if input.VariableName != "" {
-		yamlSnippet = fmt.Sprintf("- type: code_execution\n  step_description: \"%s\"\n  variable_name: \"%s\"", scriptID, input.VariableName)
+		yamlSnippet = fmt.Sprintf("- type: code_execution\n  script: \"%s\"\n  variable_name: \"%s\"", scriptName, input.VariableName)
 	} else {
-		yamlSnippet = fmt.Sprintf("- type: code_execution\n  step_description: \"%s\"", scriptID)
+		yamlSnippet = fmt.Sprintf("- type: code_execution\n  script: \"%s\"", scriptName)
 	}
 
 	return nil, InsertScriptBlockOutput{
-		Success:         true,
-		YAMLSnippet:     yamlSnippet,
-		ScriptID:        scriptID,
-		ScriptName:      scriptName,
-		BlockType:       "code_execution",
-		StepDescription: scriptID,
+		Success:     true,
+		YAMLSnippet: yamlSnippet,
+		ScriptID:    scriptID,
+		ScriptName:  scriptName,
+		BlockType:   "code_execution",
 	}, nil
 }
 

@@ -1550,6 +1550,46 @@ type CreateTestFromBlocksResponse struct {
 	CreatedAt    *string  `json:"created_at,omitempty"`
 }
 
+type YAMLValidationMessage struct {
+	Severity     string `json:"severity"`
+	Code         string `json:"code,omitempty"`
+	Message      string `json:"message"`
+	FieldPath    string `json:"field_path,omitempty"`
+	Line         int    `json:"line,omitempty"`
+	LineNumber   int    `json:"line_number,omitempty"`
+	Column       int    `json:"column,omitempty"`
+	ColumnNumber int    `json:"column_number,omitempty"`
+	Suggestion   string `json:"suggestion,omitempty"`
+}
+
+type ValidateYAMLRequest struct {
+	YAMLContent    string `json:"yaml_content"`
+	ValidationType string `json:"validation_type,omitempty"`
+	Platform       string `json:"platform,omitempty"`
+}
+
+type ValidateYAMLResponse struct {
+	IsValid        bool                    `json:"is_valid"`
+	ValidationType string                  `json:"validation_type"`
+	Errors         int                     `json:"errors"`
+	Warnings       int                     `json:"warnings"`
+	Messages       []YAMLValidationMessage `json:"messages"`
+}
+
+func (c *Client) ValidateYAML(ctx context.Context, req *ValidateYAMLRequest) (*ValidateYAMLResponse, error) {
+	resp, err := c.doRequest(ctx, "POST", "/api/v1/tests/yaml/validate-yaml", req)
+	if err != nil {
+		return nil, err
+	}
+
+	var result ValidateYAMLResponse
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
 // CreateTestFromBlocks creates a test from editor blocks using the YAML v2 API.
 func (c *Client) CreateTestFromBlocks(ctx context.Context, req *CreateTestFromBlocksRequest) (*CreateTestFromBlocksResponse, error) {
 	resp, err := c.doRequest(ctx, "POST", "/api/v1/tests/yaml/from-blocks", req)

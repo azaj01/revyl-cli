@@ -153,6 +153,20 @@ def process_schema(schema):
 with open('openapi.json', 'r') as f:
     spec = json.load(f)
 
+# The CLI intentionally does not expose YAML validation. Backend/product own
+# YAML validation semantics, while CLI create/push paths only parse/transport
+# YAML and let backend mutation endpoints return authoritative errors.
+paths = spec.get('paths', {})
+paths.pop('/api/v1/tests/yaml/validate-yaml', None)
+schemas = spec.get('components', {}).get('schemas', {})
+for schema_name in ('ValidationRequest', 'ValidationResponse', 'ValidationTypeEnum'):
+    schemas.pop(schema_name, None)
+
+# Keep the cached CLI spec aligned with the CLI surface. The backend may expose
+# YAML validation for product surfaces, but the CLI spec should not advertise it.
+with open('openapi.json', 'w') as f:
+    json.dump(spec, f)
+
 # Downgrade version
 spec['openapi'] = '3.0.3'
 

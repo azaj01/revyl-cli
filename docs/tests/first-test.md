@@ -119,21 +119,13 @@ Key fields:
 - `test.build.name` — must match a Revyl app name exactly. Check with `revyl app list`.
 - `test.blocks` — ordered list of steps (intent-level instructions, assertions in separate `validation` blocks)
 
-## Step 6: Validate the YAML
-
-```bash
-revyl test validate ./login-smoke.yaml
-```
-
-Fix any errors before proceeding. Use `--json` for machine-readable output.
-
-## Step 7: Create the test
+## Step 6: Create the test
 
 ```bash
 revyl test create login-smoke --from-file ./login-smoke.yaml
 ```
 
-This validates the YAML, copies it to `.revyl/tests/login-smoke.yaml`, creates the remote test, and writes config if it doesn't exist yet.
+This checks the YAML with backend validation, copies it to `.revyl/tests/login-smoke.yaml`, creates the remote test, and writes config if it doesn't exist yet.
 
 ## Step 8: Run the test
 

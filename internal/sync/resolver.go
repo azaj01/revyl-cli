@@ -364,7 +364,11 @@ func (r *Resolver) SyncToRemote(ctx context.Context, testName, testsDir string, 
 			// Resolve module/script names → UUIDs on a copy so the
 			// local YAML stays human-readable.
 			resolvedBlocks := deepCopyBlocks(localTest.Test.Blocks)
-			resolveBlockNamesForPush(resolvedBlocks, pushScriptNames, pushModuleNames)
+			if err := resolveBlockNamesForPush(resolvedBlocks, pushScriptNames, pushModuleNames); err != nil {
+				result.Error = err
+				results = append(results, result)
+				continue
+			}
 
 			// Create new test on remote
 			resp, err := r.client.CreateTest(ctx, &api.CreateTestRequest{
@@ -405,7 +409,11 @@ func (r *Resolver) SyncToRemote(ctx context.Context, testName, testsDir string, 
 			}
 
 			updateBlocks := deepCopyBlocks(localTest.Test.Blocks)
-			resolveBlockNamesForPush(updateBlocks, pushScriptNames, pushModuleNames)
+			if err := resolveBlockNamesForPush(updateBlocks, pushScriptNames, pushModuleNames); err != nil {
+				result.Error = err
+				results = append(results, result)
+				continue
+			}
 
 			resp, err := r.client.UpdateTest(ctx, &api.UpdateTestRequest{
 				TestID:          remoteID,
@@ -1043,10 +1051,9 @@ func (r *Resolver) fetchNameMappings(ctx context.Context) (map[string]string, ma
 	return scriptNames, moduleNames
 }
 
-// resolveBlockNames adds human-readable names alongside UUIDs in pulled
-// blocks so the local YAML is readable. Both the UUID and the resolved name
-// are kept so that a push round-trip preserves the UUID the execution engine
-// requires.
+// resolveBlockNames converts pulled internal references into clean authored YAML.
+// Legacy code_execution UUIDs in step_description are normalized into script_id
+// so local YAML no longer treats step_description as a reference payload.
 func resolveBlockNames(blocks []config.TestBlock, scriptNames, moduleNames map[string]string) {
 	for i := range blocks {
 		b := &blocks[i]
@@ -1054,13 +1061,33 @@ func resolveBlockNames(blocks []config.TestBlock, scriptNames, moduleNames map[s
 		if b.Type == "code_execution" && b.StepDescription != "" {
 			if name, ok := scriptNames[b.StepDescription]; ok {
 				b.Script = name
+				b.ScriptID = b.StepDescription
+				b.StepDescription = ""
 			}
+		}
+		if b.Type == "code_execution" && b.Script == "" && b.ScriptID != "" {
+			if name, ok := scriptNames[b.ScriptID]; ok {
+				b.Script = name
+			}
+		}
+		if b.Type == "code_execution" && b.Script != "" {
+			b.ScriptID = ""
 		}
 
 		if b.Type == "module_import" && b.ModuleID != "" {
 			if name, ok := moduleNames[b.ModuleID]; ok {
 				b.Module = name
 			}
+		}
+		if b.Type == "module_import" && b.Module != "" {
+			b.ModuleID = ""
+		}
+
+		if isDefaultStepType(b.Type, b.StepType) {
+			b.StepType = ""
+		}
+		if (b.Type == "if" || b.Type == "while") && b.Condition != "" && b.StepDescription == b.Condition {
+			b.StepDescription = ""
 		}
 
 		if len(b.Then) > 0 {
@@ -1075,55 +1102,82 @@ func resolveBlockNames(blocks []config.TestBlock, scriptNames, moduleNames map[s
 	}
 }
 
-// resolveBlockNamesForPush resolves human-readable module and script names
-// to their UUIDs before blocks are sent to the API. Operates on the provided
-// slice in-place; callers should pass a deep copy if the originals must stay
-// unmodified.
+func isDefaultStepType(blockType, stepType string) bool {
+	switch blockType {
+	case "instructions":
+		return stepType == "instruction"
+	case "validation":
+		return stepType == "validation"
+	case "extraction":
+		return stepType == "extract"
+	case "code_execution":
+		return stepType == "code_execution"
+	case "module_import":
+		return stepType == "module_import"
+	case "if":
+		return stepType == "decision"
+	case "while":
+		return stepType == "loop"
+	default:
+		return false
+	}
+}
+
+// resolveBlockNamesForPush resolves human-readable module and script names to
+// explicit UUID fields before blocks are sent to the API. Operates on the
+// provided slice in-place; callers should pass a deep copy if the originals
+// must stay unmodified.
 //
 // Parameters:
 //   - blocks: The blocks to resolve (mutated in-place)
 //   - scriptNames: Map of script UUID -> name (from fetchNameMappings)
 //   - moduleNames: Map of module UUID -> name (from fetchNameMappings)
-func resolveBlockNamesForPush(blocks []config.TestBlock, scriptNames, moduleNames map[string]string) {
+func resolveBlockNamesForPush(blocks []config.TestBlock, scriptNames, moduleNames map[string]string) error {
 	scriptByName := make(map[string]string, len(scriptNames))
 	for id, name := range scriptNames {
-		scriptByName[strings.ToLower(name)] = id
+		scriptByName[name] = id
 	}
 	moduleByName := make(map[string]string, len(moduleNames))
 	for id, name := range moduleNames {
-		moduleByName[strings.ToLower(name)] = id
+		moduleByName[name] = id
 	}
 
-	resolveBlockNamesForPushWalk(blocks, scriptByName, moduleByName)
+	var errors []string
+	resolveBlockNamesForPushWalk(blocks, scriptByName, moduleByName, &errors)
+	if len(errors) > 0 {
+		return fmt.Errorf("%s", strings.Join(errors, "; "))
+	}
+	return nil
 }
 
-func resolveBlockNamesForPushWalk(blocks []config.TestBlock, scriptByName, moduleByName map[string]string) {
+func resolveBlockNamesForPushWalk(blocks []config.TestBlock, scriptByName, moduleByName map[string]string, errors *[]string) {
 	for i := range blocks {
 		b := &blocks[i]
 
 		if b.Type == "module_import" && b.ModuleID == "" && b.Module != "" {
-			if id, ok := moduleByName[strings.ToLower(b.Module)]; ok {
+			if id, ok := moduleByName[b.Module]; ok {
 				b.ModuleID = id
-				if b.StepDescription == "" {
-					b.StepDescription = b.Module
-				}
+			} else {
+				*errors = append(*errors, fmt.Sprintf("module %q not found; use an exact module name", b.Module))
 			}
 		}
 
-		if b.Type == "code_execution" && b.StepDescription == "" && b.Script != "" {
-			if id, ok := scriptByName[strings.ToLower(b.Script)]; ok {
-				b.StepDescription = id
+		if b.Type == "code_execution" && b.ScriptID == "" && b.Script != "" {
+			if id, ok := scriptByName[b.Script]; ok {
+				b.ScriptID = id
+			} else {
+				*errors = append(*errors, fmt.Sprintf("script %q not found; use an exact script name", b.Script))
 			}
 		}
 
 		if len(b.Then) > 0 {
-			resolveBlockNamesForPushWalk(b.Then, scriptByName, moduleByName)
+			resolveBlockNamesForPushWalk(b.Then, scriptByName, moduleByName, errors)
 		}
 		if len(b.Else) > 0 {
-			resolveBlockNamesForPushWalk(b.Else, scriptByName, moduleByName)
+			resolveBlockNamesForPushWalk(b.Else, scriptByName, moduleByName, errors)
 		}
 		if len(b.Body) > 0 {
-			resolveBlockNamesForPushWalk(b.Body, scriptByName, moduleByName)
+			resolveBlockNamesForPushWalk(b.Body, scriptByName, moduleByName, errors)
 		}
 	}
 }

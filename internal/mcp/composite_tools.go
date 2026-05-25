@@ -91,8 +91,7 @@ Actions:
   update       - Update a test's YAML. Params: test_name (required), yaml_content (required)
   delete       - Delete a test. Params: test_name (required)
   status       - Get execution status. Params: task_id (required)
-  cancel       - Cancel a running test. Params: task_id (required)
-  validate     - Validate YAML syntax. Params: yaml_content (required)`,
+  cancel       - Cancel a running test. Params: task_id (required)`,
 		Annotations: &mcp.ToolAnnotations{
 			Title:         "Manage Tests",
 			OpenWorldHint: boolPtr(true),
@@ -118,11 +117,9 @@ func (s *Server) handleManageTests(ctx context.Context, req *mcp.CallToolRequest
 		return dispatchComposite(ctx, req, input, s.handleGetTestStatus)
 	case "cancel":
 		return dispatchComposite(ctx, req, input, s.handleCancelTest)
-	case "validate":
-		return dispatchComposite(ctx, req, input, s.handleValidateYAML)
 	default:
 		return nil, CompositeOutput{Action: input.Action},
-			fmt.Errorf("unknown action %q for manage_tests; valid: run, list, list_remote, create, update, delete, status, cancel, validate", input.Action)
+			fmt.Errorf("unknown action %q for manage_tests; valid: run, list, list_remote, create, update, delete, status, cancel", input.Action)
 	}
 }
 
@@ -275,7 +272,7 @@ Actions:
   create - Create a script. Params: name (required), code (required), runtime (required), description
   update - Update a script. Params: script_id (required), name, code, runtime, description
   delete - Delete a script. Params: script_id (required)
-  insert - Get a code_execution YAML snippet. Params: script_name_or_id (required)`,
+  insert - Get a canonical code_execution YAML snippet using script: <name>. Params: script_name_or_id (required)`,
 		Annotations: &mcp.ToolAnnotations{
 			Title: "Manage Scripts",
 		},

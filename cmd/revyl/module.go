@@ -134,11 +134,10 @@ var moduleInsertCmd = &cobra.Command{
 
 EXAMPLES:
   revyl module insert login-flow
-  # Output:
-  # Paste this into your test YAML:
-  # - type: module_import
-  #   step_description: "Login Flow"
-  #   module_id: "abc-123-uuid"`,
+	  # Output:
+	  # Paste this into your test YAML:
+	  # - type: module_import
+	  #   module: "Login Flow"`,
 	Args: cobra.ExactArgs(1),
 	RunE: runModuleInsert,
 }

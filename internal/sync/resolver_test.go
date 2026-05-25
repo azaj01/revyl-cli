@@ -590,14 +590,17 @@ func TestResolveBlockNames(t *testing.T) {
 	if blocks[0].Script != "validate-auth" {
 		t.Fatalf("blocks[0].Script = %q, want validate-auth", blocks[0].Script)
 	}
-	if blocks[0].StepDescription != "script-uuid-1" {
-		t.Fatalf("blocks[0].StepDescription should be preserved, got %q", blocks[0].StepDescription)
+	if blocks[0].ScriptID != "" {
+		t.Fatalf("blocks[0].ScriptID should be cleared for local YAML, got %q", blocks[0].ScriptID)
+	}
+	if blocks[0].StepDescription != "" {
+		t.Fatalf("blocks[0].StepDescription should be cleared, got %q", blocks[0].StepDescription)
 	}
 	if blocks[1].Module != "login-module" {
 		t.Fatalf("blocks[1].Module = %q, want login-module", blocks[1].Module)
 	}
-	if blocks[1].ModuleID != "module-uuid-1" {
-		t.Fatalf("blocks[1].ModuleID should be preserved, got %q", blocks[1].ModuleID)
+	if blocks[1].ModuleID != "" {
+		t.Fatalf("blocks[1].ModuleID should be cleared for local YAML, got %q", blocks[1].ModuleID)
 	}
 	if blocks[2].StepDescription != "Tap login" {
 		t.Fatalf("blocks[2].StepDescription = %q, want Tap login", blocks[2].StepDescription)
@@ -605,8 +608,85 @@ func TestResolveBlockNames(t *testing.T) {
 	if blocks[3].Then[0].Script != "cleanup-session" {
 		t.Fatalf("nested block Script = %q, want cleanup-session", blocks[3].Then[0].Script)
 	}
-	if blocks[3].Then[0].StepDescription != "script-uuid-2" {
-		t.Fatalf("nested block StepDescription should be preserved, got %q", blocks[3].Then[0].StepDescription)
+	if blocks[3].Then[0].ScriptID != "" {
+		t.Fatalf("nested block ScriptID should be cleared for local YAML, got %q", blocks[3].Then[0].ScriptID)
+	}
+	if blocks[3].Then[0].StepDescription != "" {
+		t.Fatalf("nested block StepDescription should be cleared, got %q", blocks[3].Then[0].StepDescription)
+	}
+}
+
+func TestResolveBlockNamesCleansPulledCanonicalYAMLNoise(t *testing.T) {
+	blocks := []config.TestBlock{
+		{
+			Type:         "code_execution",
+			StepType:     "code_execution",
+			ScriptID:     "script-uuid-1",
+			VariableName: "output",
+		},
+		{
+			Type:     "module_import",
+			StepType: "module_import",
+			ModuleID: "module-uuid-1",
+		},
+		{
+			Type:            "if",
+			StepType:        "decision",
+			StepDescription: "is visible?",
+			Condition:       "is visible?",
+			Then: []config.TestBlock{
+				{Type: "instructions", StepType: "instruction", StepDescription: "Tap login"},
+			},
+		},
+	}
+	scriptNames := map[string]string{"script-uuid-1": "validate-auth"}
+	moduleNames := map[string]string{"module-uuid-1": "login-module"}
+
+	resolveBlockNames(blocks, scriptNames, moduleNames)
+
+	if blocks[0].Script != "validate-auth" || blocks[0].ScriptID != "" || blocks[0].StepType != "" {
+		t.Fatalf("code block not canonicalized: %#v", blocks[0])
+	}
+	if blocks[1].Module != "login-module" || blocks[1].ModuleID != "" || blocks[1].StepType != "" {
+		t.Fatalf("module block not canonicalized: %#v", blocks[1])
+	}
+	if blocks[2].StepType != "" || blocks[2].StepDescription != "" || blocks[2].Then[0].StepType != "" {
+		t.Fatalf("control-flow block not canonicalized: %#v", blocks[2])
+	}
+}
+
+func TestResolveBlockNamesForPushUsesCanonicalIDFields(t *testing.T) {
+	blocks := []config.TestBlock{
+		{Type: "code_execution", Script: "validate-auth"},
+		{Type: "module_import", Module: "login-module"},
+		{
+			Type:      "if",
+			Condition: "is visible?",
+			Then: []config.TestBlock{
+				{Type: "code_execution", Script: "cleanup-session"},
+			},
+		},
+	}
+	scriptNames := map[string]string{
+		"script-uuid-1": "validate-auth",
+		"script-uuid-2": "cleanup-session",
+	}
+	moduleNames := map[string]string{
+		"module-uuid-1": "login-module",
+	}
+
+	if err := resolveBlockNamesForPush(blocks, scriptNames, moduleNames); err != nil {
+		t.Fatalf("resolveBlockNamesForPush() error = %v", err)
+	}
+
+	if blocks[0].ScriptID != "script-uuid-1" || blocks[0].StepDescription != "" {
+		t.Fatalf("code block = %#v", blocks[0])
+	}
+	if blocks[1].ModuleID != "module-uuid-1" || blocks[1].StepDescription != "" {
+		t.Fatalf("module block = %#v", blocks[1])
+	}
+	if blocks[2].Then[0].ScriptID != "script-uuid-2" || blocks[2].Then[0].StepDescription != "" {
+		t.Fatalf("nested code block = %#v", blocks[2].Then[0])
 	}
 }
 

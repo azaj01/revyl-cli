@@ -8,7 +8,6 @@ Define, version-control, and sync your Revyl tests as YAML files.
 revyl init                          # creates .revyl/config.yaml
 revyl test create login-flow        # creates .revyl/tests/login-flow.yaml
 # edit the YAML file
-revyl test validate                 # check syntax
 revyl test push                     # push to Revyl
 revyl test run login-flow           # run it
 ```
@@ -29,7 +28,7 @@ revyl test create login-flow --from-file ./login-flow.yaml
 
 This command:
 
-1. Validates the YAML
+1. Checks the YAML with the backend validator
 2. Copies it to `.revyl/tests/<name>.yaml`
 3. Creates (or updates) the remote test
 4. Writes `.revyl/config.yaml` if it doesn't exist yet
@@ -46,16 +45,13 @@ revyl test create --from-file ./test.yaml --dry-run   # preview without creating
 ### Recommended loop
 
 ```bash
-# 1. Validate
-revyl test validate ./my-test.yaml
-
-# 2. Create and bootstrap local state
+# 1. Create and bootstrap local state
 revyl test create --from-file ./my-test.yaml
 
-# 3. Iterate on the synced file
+# 2. Iterate on the synced file
 revyl test push my-test --force
 
-# 4. Run and inspect
+# 3. Run and inspect
 revyl test run my-test
 revyl test report my-test --json
 ```
@@ -96,11 +92,13 @@ test:
 | `instructions` | Perform an action | `step_description` |
 | `validation` | Assert something is true | `step_description` |
 | `extraction` | Extract data into a variable | `step_description`, `variable_name` |
-| `manual` | Built-in actions (wait, navigate, etc.) | `step_type`, `step_description` |
+| `manual` | Built-in actions (`wait`, `navigate`, `set_location`, `set_orientation`, `set_appearance`, `download_file`, `open_app`, `kill_app`, `go_home`, `end`) | `step_type`; parameter in `step_description` or `file` when required |
 | `if` | Conditional branch | `condition`, `then` (blocks) |
 | `while` | Loop | `condition`, `body` (blocks) |
-| `code_execution` | Run a script | `script` or `step_description` |
-| `module_import` | Reuse a shared module | `module` or `module_id` |
+| `code_execution` | Run a script | `script` |
+| `module_import` | Reuse a shared module | `module` |
+
+Legacy YAML using `code_execution.step_description` as a script UUID or `module_import.module_id` as a module UUID is still accepted for compatibility. New YAML should use `script` and `module`.
 
 ## Variables
 

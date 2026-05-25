@@ -99,8 +99,14 @@ test:
 	if got := moduleBlock["type"]; got != "module_import" {
 		t.Fatalf("module block type = %v, want module_import", got)
 	}
-	if got := moduleBlock["module_id"]; got != "mod-1" {
-		t.Fatalf("module_id = %v, want mod-1", got)
+	if _, ok := moduleBlock["module_id"]; ok {
+		t.Fatalf("module block should not include module_id: %#v", moduleBlock)
+	}
+	if got := moduleBlock["module"]; got != "login-flow" {
+		t.Fatalf("module = %v, want login-flow", got)
+	}
+	if _, ok := moduleBlock["step_description"]; ok {
+		t.Fatalf("module block should not include step_description: %#v", moduleBlock)
 	}
 
 	instructionBlock, ok := tasks[1].(map[string]any)

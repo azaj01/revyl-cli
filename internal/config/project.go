@@ -752,13 +752,20 @@ type TestBlock struct {
 	// ModuleID is the module UUID for module_import blocks.
 	ModuleID string `yaml:"module_id,omitempty" json:"module_id,omitempty"`
 
+	// ScriptID is the resolved script UUID for code_execution blocks.
+	ScriptID string `yaml:"script_id,omitempty" json:"script_id,omitempty"`
+
 	// Script is the human-readable script name for code_execution blocks.
-	// Resolved to a UUID (step_description) on push/sync.
 	Script string `yaml:"script,omitempty" json:"script,omitempty"`
 
 	// Module is the human-readable module name for module_import blocks.
-	// Resolved to a UUID (module_id) on push/sync.
 	Module string `yaml:"module,omitempty" json:"module,omitempty"`
+
+	// File is the org file name for manual/download_file blocks.
+	File string `yaml:"file,omitempty" json:"file,omitempty"`
+
+	// FileURI is the resolved revyl-file:// URI for manual/download_file blocks.
+	FileURI string `yaml:"file_uri,omitempty" json:"file_uri,omitempty"`
 }
 
 // ComputeTestChecksum computes a SHA-256 checksum of the test definition.

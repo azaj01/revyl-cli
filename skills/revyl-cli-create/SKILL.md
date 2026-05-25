@@ -20,17 +20,14 @@ description: Create robust Revyl E2E tests using CLI commands from app source an
 revyl auth status
 revyl app list --platform <ios|android>
 
-# 2) Author YAML locally, then validate it
-revyl test validate ./<test-name>.yaml
-
-# 3) Create from YAML (bootstraps .revyl/tests/ and config)
+# 2) Create from YAML (bootstraps .revyl/tests/ and config)
 revyl test create <test-name> --from-file ./<test-name>.yaml
 
-# 4) Iterate on .revyl/tests/<test-name>.yaml, then push and run
+# 3) Iterate on .revyl/tests/<test-name>.yaml, then push and run
 revyl test push <test-name> --force
 revyl test run <test-name>
 
-# 5) Inspect results and refine
+# 4) Inspect results and refine
 revyl test status <test-name>
 revyl test report <test-name> --json
 ```
@@ -41,7 +38,7 @@ YAML-first bootstrap works without an existing `.revyl/config.yaml`:
 revyl test create <test-name> --from-file ./test.yaml
 ```
 
-The CLI validates the YAML, copies it into `.revyl/tests/`, pushes it, and writes `.revyl/config.yaml` after the remote test is created.
+The CLI checks the YAML with backend validation, copies it into `.revyl/tests/`, pushes it, and writes `.revyl/config.yaml` after the remote test is created.
 
 If you prefer to scaffold first:
 
@@ -73,7 +70,7 @@ Then author YAML explicitly and create it with `revyl test create --from-file`. 
 
 ## Tool Map
 
-- Tests: `revyl test validate`, `create`, `push`, `run`, `report`, `status`, and `history`.
+- Tests: `revyl test create`, `push`, `run`, `report`, `status`, and `history`.
 - Modules: `revyl module create/list/get/update/usage/insert` for reusable block groups.
 - Scripts: `revyl script create/list/get/update/usage/insert` for `code_execution` blocks.
 - Variables: `test.variables`, `revyl test var`, `revyl global var`, `extraction.variable_name`, and `code_execution.variable_name`.
@@ -140,12 +137,13 @@ Use the snippet from `revyl script insert`, or write the block directly:
 
 ```yaml
 - type: code_execution
-  step_description: "seed-user"
   script: "seed-user"
   variable_name: seeded_user_id
 ```
 
-Use inline code only for small one-offs:
+Legacy YAML may use `step_description` to hold an internal script UUID, but new authored YAML should use `script`.
+
+Use inline code only for small one-offs when a saved script would be unnecessary:
 
 ```yaml
 - type: code_execution
@@ -177,9 +175,10 @@ Import with the snippet from `revyl module insert`:
 
 ```yaml
 - type: module_import
-  step_description: "login-flow"
-  module_id: "65c5ac48-b980-43c7-a78e-e58b0daf183b"
+  module: "login-flow"
 ```
+
+Legacy YAML may use `module_id` to hold an internal module UUID, but new authored YAML should use `module`.
 
 ## Full Flow Example
 
@@ -198,13 +197,11 @@ test:
     product-name: Orchid Mantis
   blocks:
     - type: code_execution
-      step_description: "seed-checkout-user"
       script: "seed-checkout-user"
       variable_name: seeded_user_id
 
     - type: module_import
-      step_description: "login-flow"
-      module_id: "65c5ac48-b980-43c7-a78e-e58b0daf183b"
+      module: "login-flow"
 
     - type: instructions
       step_description: "Complete checkout for {{product-name}} using the saved shipping address."

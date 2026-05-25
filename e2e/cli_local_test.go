@@ -3,8 +3,6 @@
 package e2e
 
 import (
-	"encoding/json"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -52,34 +50,4 @@ func TestCLILocal(t *testing.T) {
 		}
 	})
 
-	step(t, "validate_minimal_yaml", func(st *testing.T) {
-		yamlPath := filepath.Join(testdataDir(), "minimal.yaml")
-		result := runCLI(t, "test", "validate", yamlPath, "--json")
-		if result.ExitCode != 0 {
-			st.Logf("test validate not supported or failed: %s", result.Stderr)
-			return
-		}
-		raw := extractJSON(result.Stdout)
-		if !json.Valid([]byte(raw)) {
-			st.Fatalf("validate output is not valid JSON: %s", result.Stdout)
-		}
-	})
-
-	step(t, "validate_comprehensive_yaml", func(st *testing.T) {
-		yamlPath := filepath.Join(testdataDir(), "comprehensive.yaml")
-		result := runCLI(t, "test", "validate", yamlPath, "--json")
-		if result.ExitCode != 0 {
-			st.Logf("test validate not supported: %s", result.Stderr)
-			return
-		}
-	})
-
-	step(t, "validate_invalid_yaml_reports_errors", func(st *testing.T) {
-		yamlPath := filepath.Join(testdataDir(), "invalid.yaml")
-		result := runCLI(t, "test", "validate", yamlPath, "--json")
-		combined := result.Stdout + result.Stderr
-		if result.ExitCode == 0 && !strings.Contains(strings.ToLower(combined), "error") && !strings.Contains(strings.ToLower(combined), "invalid") {
-			st.Fatalf("invalid YAML should produce errors but got clean exit: %s", combined)
-		}
-	})
 }

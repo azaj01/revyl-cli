@@ -15,7 +15,6 @@ import (
 	"github.com/revyl/cli/internal/api"
 	"github.com/revyl/cli/internal/config"
 	"github.com/revyl/cli/internal/orgguard"
-	yamlvalidate "github.com/revyl/cli/internal/yaml"
 )
 
 // CreateTestParams contains parameters for creating a test.
@@ -248,14 +247,13 @@ func resolveCreateTestModules(ctx context.Context, client *api.Client, refs []st
 		if ref == "" {
 			continue
 		}
-		moduleID, moduleName, err := resolveCreateTestModule(ctx, client, ref)
+		_, moduleName, err := resolveCreateTestModule(ctx, client, ref)
 		if err != nil {
 			return nil, err
 		}
 		blocks = append(blocks, map[string]interface{}{
-			"type":             "module_import",
-			"step_description": moduleName,
-			"module_id":        moduleID,
+			"type":   "module_import",
+			"module": moduleName,
 		})
 	}
 	return blocks, nil
@@ -275,12 +273,12 @@ func resolveCreateTestModule(ctx context.Context, client *api.Client, ref string
 	}
 
 	for _, module := range listResp.Result {
-		if strings.EqualFold(strings.TrimSpace(module.Name), ref) {
+		if strings.TrimSpace(module.Name) == ref {
 			return module.ID, module.Name, nil
 		}
 	}
 
-	return "", "", fmt.Errorf("module %q not found", ref)
+	return "", "", fmt.Errorf("module %q not found; use an exact module name or UUID", ref)
 }
 
 func resolveCreateTestApp(ctx context.Context, client *api.Client, cfg *config.ProjectConfig, platform, explicitAppID, yamlBuildName string) (*api.App, error) {
@@ -391,13 +389,8 @@ func validateCreateTestContent(name, platform, appName string, tasks []interface
 			"blocks": tasks,
 		},
 	}
-	content, err := yamlPkg.Marshal(doc)
-	if err != nil {
+	if _, err := yamlPkg.Marshal(doc); err != nil {
 		return fmt.Errorf("failed to marshal composed test content: %w", err)
-	}
-	result := yamlvalidate.ValidateYAML(string(content))
-	if !result.Valid {
-		return fmt.Errorf("YAML validation failed: %v", result.Errors)
 	}
 	return nil
 }

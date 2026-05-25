@@ -244,13 +244,6 @@ func getCommonWorkflows() []Workflow {
 			},
 		},
 		{
-			Name:        "Validate YAML tests",
-			Description: "Check YAML syntax before committing",
-			Steps: []string{
-				"revyl test validate .revyl/tests/*.yaml",
-			},
-		},
-		{
 			Name:        "MCP server for AI agents",
 			Description: "Start MCP server for AI integration",
 			Steps: []string{
@@ -460,7 +453,6 @@ func ToLLMFormat(schema *CLISchema, yamlSchema string) string {
 	sb.WriteString("revyl test cancel <task_id>   # Cancel a running test\n")
 	sb.WriteString("revyl workflow cancel <id>    # Cancel a running workflow\n")
 	sb.WriteString("revyl test list               # List available tests\n")
-	sb.WriteString("revyl test validate <f>       # Validate YAML syntax\n")
 	sb.WriteString("revyl schema                  # Get this schema\n")
 	sb.WriteString("```\n\n")
 

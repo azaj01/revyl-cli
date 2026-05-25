@@ -20,7 +20,6 @@ import (
 	"github.com/revyl/cli/internal/interactive"
 	"github.com/revyl/cli/internal/orgguard"
 	"github.com/revyl/cli/internal/ui"
-	"github.com/revyl/cli/internal/yaml"
 	yamlPkg "gopkg.in/yaml.v3"
 )
 
@@ -305,9 +304,8 @@ func runCreateTest(cmd *cobra.Command, args []string) error {
 				return err
 			}
 			tasks = append(tasks, map[string]interface{}{
-				"type":             "module_import",
-				"step_description": moduleName,
-				"module_id":        moduleID,
+				"type":   "module_import",
+				"module": moduleName,
 			})
 			ui.PrintInfo("  + module: %s (%s)", moduleName, moduleID)
 		}
@@ -401,6 +399,8 @@ func runCreateTest(cmd *cobra.Command, args []string) error {
 // Returns:
 //   - error: Any error that occurred during test creation
 func runCreateTestFromFile(cmd *cobra.Command, args []string) error {
+	cmd.SilenceUsage = true
+
 	var testName string
 	if len(args) > 0 {
 		testName = args[0]
@@ -410,10 +410,10 @@ func runCreateTestFromFile(cmd *cobra.Command, args []string) error {
 			ui.PrintError("Failed to read YAML file: %v", err)
 			return fmt.Errorf("failed to read YAML file: %w", err)
 		}
-		var def yaml.TestDefinition
+		var def config.LocalTest
 		if err := yamlPkg.Unmarshal(content, &def); err != nil {
-			ui.PrintError("Failed to parse YAML file: %v", err)
-			return fmt.Errorf("failed to parse YAML file: %w", err)
+			ui.PrintError("Failed to parse YAML file %s: %v", createTestFromFile, err)
+			return fmt.Errorf("failed to parse YAML file %s: %w", createTestFromFile, err)
 		}
 		testName = def.Test.Metadata.Name
 		if testName == "" {
@@ -428,24 +428,8 @@ func runCreateTestFromFile(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Validate the YAML file first
-	validationResult, err := yaml.ValidateYAMLFile(createTestFromFile)
-	if err != nil {
-		ui.PrintError("Failed to read YAML file: %v", err)
+	if err := validateYAMLFilesWithBackend(cmd, []string{createTestFromFile}); err != nil {
 		return err
-	}
-
-	if !validationResult.Valid {
-		ui.PrintError("YAML validation failed:")
-		for _, e := range validationResult.Errors {
-			ui.PrintError("  %s", e)
-		}
-		return fmt.Errorf("validation failed")
-	}
-
-	// Show warnings if any
-	for _, w := range validationResult.Warnings {
-		ui.PrintWarning("  %s", w)
 	}
 
 	// Get current directory
@@ -457,13 +441,13 @@ func runCreateTestFromFile(cmd *cobra.Command, args []string) error {
 	// Handle dry-run mode
 	if createTestDryRun {
 		ui.Println()
-		ui.PrintInfo("Dry-run mode - YAML validation passed:")
+		ui.PrintInfo("Dry-run mode - test file would be added:")
 		ui.Println()
 		ui.PrintInfo("  Source:      %s", createTestFromFile)
 		ui.PrintInfo("  Destination: .revyl/tests/%s.yaml", testName)
 		ui.PrintInfo("  Test Name:   %s", testName)
 		ui.Println()
-		ui.PrintSuccess("Dry-run complete - YAML is valid, no changes made")
+		ui.PrintSuccess("Dry-run complete - no changes made")
 		return nil
 	}
 
@@ -1215,12 +1199,12 @@ func resolveModuleForCreate(cmd *cobra.Command, client *api.Client, nameOrID str
 	}
 
 	for _, m := range listResp.Result {
-		if strings.EqualFold(m.Name, nameOrID) {
+		if strings.TrimSpace(m.Name) == strings.TrimSpace(nameOrID) {
 			return m.ID, m.Name, nil
 		}
 	}
 
-	return "", "", fmt.Errorf("module \"%s\" not found", nameOrID)
+	return "", "", fmt.Errorf("module %q not found; use an exact module name or UUID", nameOrID)
 }
 
 // runHeadlessSession starts a device session without the interactive REPL.

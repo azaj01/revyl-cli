@@ -4,7 +4,7 @@ This guide covers the full test authoring lifecycle: YAML-first creation, reusab
 
 ## Choose a Workflow
 
-1. **YAML-first CLI (recommended)** -- start from a local YAML file, validate it, create the remote test, and bootstrap `.revyl/config.yaml` automatically.
+1. **YAML-first CLI (recommended)** -- start from a local YAML file, create the remote test, and bootstrap `.revyl/config.yaml` automatically. The CLI checks the file with backend YAML validation before mutation.
 2. **Scaffold first** -- create an empty or module-seeded remote test with `revyl test create`, sync the generated YAML into `.revyl/tests/`, then edit and push locally.
 3. **Session to regression** -- convert a completed exploratory device session with `revyl test create --from-session <session-id>`, then refine the synced YAML and push it back as a stable regression.
 
@@ -36,13 +36,7 @@ test:
       step_description: The inbox is visible.
 ```
 
-### 2. Validate
-
-```bash
-revyl test validate ./smoke-login-ios.yaml
-```
-
-### 3. Create the test
+### 2. Create the test
 
 ```bash
 revyl test create smoke-login-ios --from-file ./smoke-login-ios.yaml
@@ -99,7 +93,7 @@ Common block types:
 |------|-------|
 | `instructions` | A single user action |
 | `validation` | An assertion about expected state |
-| `manual` | Framework-level actions: `wait`, `go_home`, `navigate`, `set_location`, `kill_app`, `open_app` |
+| `manual` | Framework-level actions: `wait`, `go_home`, `navigate`, `set_location`, `set_orientation`, `set_appearance`, `download_file`, `kill_app`, `open_app`, `end` |
 | `module_import` | Import a reusable module |
 | `if` / `while` | Conditional logic and loops |
 | `extraction` | Extract data from the screen into a variable |
@@ -142,8 +136,7 @@ revyl module insert login-flow    # Prints a ready-to-paste YAML snippet
 
 ```yaml
 - type: module_import
-  step_description: "login-flow"
-  module_id: "65c5ac48-b980-43c7-a78e-e58b0daf183b"
+  module: "login-flow"
 ```
 
 ### Manage modules
@@ -187,8 +180,7 @@ revyl script create seed-user \
 
 ```yaml
 - type: code_execution
-  step_description: seed-user
-  script_name: seed-user
+  script: seed-user
 ```
 
 ### Inline code (no saved script)
@@ -353,12 +345,10 @@ test:
     name: my-ios-app
   blocks:
     - type: code_execution
-      step_description: seed-checkout-user
-      script_name: seed-checkout-user
+      script: seed-checkout-user
 
     - type: module_import
-      step_description: login-flow
-      module_id: 65c5ac48-b980-43c7-a78e-e58b0daf183b
+      module: login-flow
 
     - type: instructions
       step_description: Tap the Shop tab.
