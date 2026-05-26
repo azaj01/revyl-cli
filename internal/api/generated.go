@@ -374,12 +374,6 @@ const (
 	ValidationErrorTypeNone          ValidationErrorType = "none"
 )
 
-// Defines values for ValidationTypeEnum.
-const (
-	BlocksOnly ValidationTypeEnum = "blocks_only"
-	FullTest   ValidationTypeEnum = "full_test"
-)
-
 // Defines values for WeakestComponent.
 const (
 	WeakestComponentBoundingBox  WeakestComponent = "bounding_box"
@@ -7962,39 +7956,6 @@ type ValidationEval struct {
 	ValidationInstruction *string `json:"validation_instruction"`
 }
 
-// ValidationRequest Request model for YAML validation
-type ValidationRequest struct {
-	// Platform Target platform for validation
-	Platform *string `json:"platform"`
-
-	// ValidationType Types of YAML validation supported
-	ValidationType *ValidationTypeEnum `json:"validation_type,omitempty"`
-
-	// YamlContent YAML content to validate
-	YamlContent string `json:"yaml_content"`
-}
-
-// ValidationResponse Response model for YAML validation
-type ValidationResponse struct {
-	// Errors Number of errors found
-	Errors int `json:"errors"`
-
-	// IsValid Whether the YAML is valid
-	IsValid bool `json:"is_valid"`
-
-	// Messages Validation messages
-	Messages []map[string]interface{} `json:"messages"`
-
-	// ValidationType Types of YAML validation supported
-	ValidationType ValidationTypeEnum `json:"validation_type"`
-
-	// Warnings Number of warnings found
-	Warnings int `json:"warnings"`
-}
-
-// ValidationTypeEnum Types of YAML validation supported
-type ValidationTypeEnum string
-
 // VariableModel defines model for VariableModel.
 type VariableModel struct {
 	TestUid       openapi_types.UUID `json:"test_uid"`
@@ -10351,9 +10312,6 @@ type CreateTestFromBlocksApiV1TestsYamlFromBlocksPostJSONRequestBody = BlocksCre
 
 // CreateTestFromYamlApiV1TestsYamlFromYamlPostJSONRequestBody defines body for CreateTestFromYamlApiV1TestsYamlFromYamlPost for application/json ContentType.
 type CreateTestFromYamlApiV1TestsYamlFromYamlPostJSONRequestBody = YamlCreationRequest
-
-// ValidateYamlApiV1TestsYamlValidateYamlPostJSONRequestBody defines body for ValidateYamlApiV1TestsYamlValidateYamlPost for application/json ContentType.
-type ValidateYamlApiV1TestsYamlValidateYamlPostJSONRequestBody = ValidationRequest
 
 // UpdateCachedElementsEndpointApiV1TestsTestIdCachedElementsPutJSONRequestBody defines body for UpdateCachedElementsEndpointApiV1TestsTestIdCachedElementsPut for application/json ContentType.
 type UpdateCachedElementsEndpointApiV1TestsTestIdCachedElementsPutJSONRequestBody = CachedActionStore
