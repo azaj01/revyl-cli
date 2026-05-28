@@ -66,6 +66,10 @@ Framework-specific guides to go from repo to test results in 3 commands.
 - [Quickstart](device/quickstart.md) — start a device session in 60 seconds
 - [Troubleshooting](device/troubleshooting.md) — common issues and fixes
 
+## Atlas
+
+- [Atlas](atlas.md) — app maps built from observed screens, variants, and transitions
+
 ## Device SDK
 
 - [Overview](device-sdk/index.md) — Python SDK overview and quick example
