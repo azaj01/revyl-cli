@@ -3963,6 +3963,24 @@ func (c *Client) GetReportBySession(ctx context.Context, sessionID string, inclu
 	}, nil
 }
 
+// GetDeviceLogsDownloadURL fetches a presigned URL for the device-logs
+// artifact attached to the given report. Device logs are not embedded
+// in the context envelope (unlike network / perf / trace / device-state) —
+// they live behind a dedicated endpoint. Returns a 404 (mapped to
+// APIError) when no device logs were uploaded for the run.
+func (c *Client) GetDeviceLogsDownloadURL(ctx context.Context, reportID string) (*DeviceLogsDownloadResponse, error) {
+	path := fmt.Sprintf("/api/v1/reports-v3/reports/%s/device-logs", reportID)
+	resp, err := c.doRequestOnce(ctx, "GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	var result DeviceLogsDownloadResponse
+	if _, err := parseResponseWithRaw(resp, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 // --- Shareable Link API types ---
 
 // CLIShareableLinkRequest represents a request to generate a shareable report link.

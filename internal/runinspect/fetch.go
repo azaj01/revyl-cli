@@ -22,6 +22,8 @@ import (
 // continue to use the full “api.CLIReportContextResponse“.
 type Report struct {
 	TaskID             string
+	ReportID           string // backend report row id; required for the dedicated device-logs endpoint
+	SessionID          string
 	TestID             string
 	TestName           string
 	Platform           string
@@ -68,6 +70,8 @@ func FetchReport(ctx context.Context, client *api.Client, taskID string) (*Repor
 	src := envelope.Report
 	out := &Report{
 		TaskID:    taskID,
+		ReportID:  src.ID,
+		SessionID: strDeref(src.SessionID),
 		TestID:    strDeref(src.TestID),
 		TestName:  strDeref(src.TestName),
 		Platform:  strDeref(src.Platform),

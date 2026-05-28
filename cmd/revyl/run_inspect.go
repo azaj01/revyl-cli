@@ -10,9 +10,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
+	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -21,13 +25,25 @@ import (
 )
 
 var runCmd = &cobra.Command{
-	Use:   "run",
-	Short: "Inspect finished test runs (state, identity, summary)",
+	Use:   "run [task_id]",
+	Short: "Inspect finished test runs (summary, state, logs, network, perf, trace)",
 	Long: `Inspect a completed test run by its task_id.
 
 Unlike 'revyl device state' (which targets a live dev-loop session),
 'revyl run' operates against the recorded artifacts that were uploaded
-to S3 when the run finished — no active worker required.`,
+to S3 when the run finished — no active worker required.
+
+Bare 'revyl run <task_id>' is shorthand for 'revyl run summary <task_id>'.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: runRootRun,
+}
+
+// runRootRun routes bare 'revyl run <task_id>' to the summary subcommand.
+func runRootRun(cmd *cobra.Command, args []string) error {
+	if len(args) == 0 {
+		return cmd.Help()
+	}
+	return runSummaryRun(cmd, args)
 }
 
 // --- run summary ----------------------------------------------------------
@@ -57,73 +73,6 @@ func runSummaryRun(cmd *cobra.Command, args []string) error {
 	return printSummary(cmd, summary)
 }
 
-// --- run identity ---------------------------------------------------------
-
-var runIdentityCmd = &cobra.Command{
-	Use:   "identity <task_id>",
-	Short: "Show who was logged in, what org, role flags, and vendor analytics IDs",
-	Args:  cobra.ExactArgs(1),
-	Example: `  revyl run identity 7aa6ce3c-...
-  revyl run identity 7aa6ce3c-... --at-step 3
-  revyl run identity 7aa6ce3c-... --json`,
-	RunE: runIdentityRun,
-}
-
-func runIdentityRun(cmd *cobra.Command, args []string) error {
-	taskID := args[0]
-	report, lines, err := loadRunArtifacts(cmd.Context(), cmd, taskID)
-	if err != nil {
-		return err
-	}
-	atStep, _ := cmd.Flags().GetInt("at-step")
-	fields := runinspect.DetectIdentity(lines, runinspect.IndexerFromReport(report), runinspect.IdentityOptions{AtStep: atStep})
-	if jsonOut, _ := cmd.Flags().GetBool("json"); jsonOut {
-		enc := json.NewEncoder(cmd.OutOrStdout())
-		enc.SetIndent("", "  ")
-		return enc.Encode(map[string]any{
-			"task_id":  taskID,
-			"identity": fields,
-		})
-	}
-	return printIdentity(cmd, fields)
-}
-
-// --- run traces -----------------------------------------------------------
-
-var runTracesCmd = &cobra.Command{
-	Use:   "traces <task_id> [--at-step N] [--vendor sentry]",
-	Short: "List backend-pivotable trace IDs captured during the run (Sentry events, transactions, replays)",
-	Args:  cobra.ExactArgs(1),
-	Example: `  revyl run traces 7aa6ce3c-...
-  revyl run traces 7aa6ce3c-... --at-step 3
-  revyl run traces 7aa6ce3c-... --vendor sentry --json`,
-	RunE: runTracesRun,
-}
-
-func runTracesRun(cmd *cobra.Command, args []string) error {
-	taskID := args[0]
-	report, lines, err := loadRunArtifacts(cmd.Context(), cmd, taskID)
-	if err != nil {
-		return err
-	}
-	atStep, _ := cmd.Flags().GetInt("at-step")
-	vendorStrs, _ := cmd.Flags().GetStringSlice("vendor")
-	opts := runinspect.TracesOptions{AtStep: atStep}
-	for _, v := range vendorStrs {
-		opts.Vendors = append(opts.Vendors, runinspect.TraceVendor(strings.TrimSpace(v)))
-	}
-	traces := runinspect.DetectTraces(lines, runinspect.IndexerFromReport(report), opts)
-	if jsonOut, _ := cmd.Flags().GetBool("json"); jsonOut {
-		enc := json.NewEncoder(cmd.OutOrStdout())
-		enc.SetIndent("", "  ")
-		return enc.Encode(map[string]any{
-			"task_id": taskID,
-			"traces":  traces,
-		})
-	}
-	return printTraces(cmd, traces)
-}
-
 // --- run state ------------------------------------------------------------
 
 var runStateCmd = &cobra.Command{
@@ -132,12 +81,16 @@ var runStateCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Example: `  revyl run state 7aa6ce3c-...                                  # list captured paths
   revyl run state 7aa6ce3c-... --path Library/Preferences/com.x.plist
-  revyl run state 7aa6ce3c-... --path Documents/cache.sqlite3 --at-step 5`,
+  revyl run state 7aa6ce3c-... --path Documents/cache.sqlite3 --at-step 5
+  revyl run state 7aa6ce3c-... --download --output ./state.jsonl.gz`,
 	RunE: runStateRun,
 }
 
 func runStateRun(cmd *cobra.Command, args []string) error {
 	taskID := args[0]
+	if download, _ := cmd.Flags().GetBool("download"); download {
+		return runStateDownload(cmd, taskID)
+	}
 	report, lines, err := loadRunArtifacts(cmd.Context(), cmd, taskID)
 	if err != nil {
 		return err
@@ -176,12 +129,536 @@ func runStateRun(cmd *cobra.Command, args []string) error {
 	return printStateSnapshot(cmd, path, snapshot)
 }
 
+// runStateDownload streams the raw device_state.jsonl.gz artifact to
+// disk without parsing it — symmetric with the network / perf / logs
+// --download flow.
+func runStateDownload(cmd *cobra.Command, taskID string) error {
+	report, _, err := loadReportOnly(cmd.Context(), cmd, taskID)
+	if err != nil {
+		return err
+	}
+	if report.DeviceStateURL == "" {
+		return fmt.Errorf("no device state uploaded for this run")
+	}
+	outPath, _ := cmd.Flags().GetString("output")
+	if outPath == "" {
+		outPath = "device_state.jsonl.gz"
+	}
+	written, err := runinspect.DownloadArtifactToFile(
+		cmd.Context(), report.DeviceStateURL, http.DefaultClient, outPath,
+	)
+	if err != nil {
+		return err
+	}
+	jsonOrPrint(cmd, map[string]any{
+		"task_id":       taskID,
+		"artifact":      "device_state",
+		"downloaded_to": outPath,
+		"bytes":         written,
+	}, fmt.Sprintf("Downloaded device state to %s (%d bytes)", outPath, written))
+	return nil
+}
+
+// --- run logs -------------------------------------------------------------
+
+var runLogsCmd = &cobra.Command{
+	Use:   "logs <task_id>",
+	Short: "Show captured device logs (iOS os_log / Android logcat) for a finished run",
+	Args:  cobra.ExactArgs(1),
+	Example: `  revyl run logs 7aa6ce3c-...
+  revyl run logs 7aa6ce3c-... --grep segment
+  revyl run logs 7aa6ce3c-... --level warn,error --tail 50
+  revyl run logs 7aa6ce3c-... --download --output ./logs.txt.gz`,
+	RunE: runLogsRun,
+}
+
+func runLogsRun(cmd *cobra.Command, args []string) error {
+	taskID := args[0]
+	report, client, err := loadReportOnly(cmd.Context(), cmd, taskID)
+	if err != nil {
+		return err
+	}
+	logsResp, err := runinspect.ResolveDeviceLogsURL(cmd.Context(), client, report.ReportID)
+	if err != nil {
+		if errors.Is(err, runinspect.ErrArtifactNotAvailable) {
+			return fmt.Errorf("no device logs uploaded for this run")
+		}
+		return err
+	}
+
+	download, _ := cmd.Flags().GetBool("download")
+	if download {
+		outPath, _ := cmd.Flags().GetString("output")
+		if outPath == "" {
+			outPath = logsResp.Filename
+			if outPath == "" {
+				outPath = "device_logs.txt.gz"
+			}
+		}
+		written, err := runinspect.DownloadArtifactToFile(
+			cmd.Context(), logsResp.DownloadUrl, http.DefaultClient, outPath,
+		)
+		if err != nil {
+			return err
+		}
+		jsonOrPrint(cmd, map[string]any{
+			"task_id":       taskID,
+			"artifact":      "device_logs",
+			"downloaded_to": outPath,
+			"bytes":         written,
+		}, fmt.Sprintf("Downloaded device logs to %s (%d bytes)", outPath, written))
+		return nil
+	}
+
+	raw, err := runinspect.FetchArtifactBytes(
+		cmd.Context(), logsResp.DownloadUrl, http.DefaultClient,
+		runinspect.DefaultCacheDir(), taskID, "device_logs.txt",
+		logsResp.Compressed,
+	)
+	if err != nil {
+		return err
+	}
+	lines := runinspect.ParseLogText(raw)
+
+	filter := runinspect.LogFilter{}
+	if pattern, _ := cmd.Flags().GetString("grep"); pattern != "" {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return fmt.Errorf("--grep: %w", err)
+		}
+		filter.Grep = re
+	}
+	if levelTokens, _ := cmd.Flags().GetStringSlice("level"); len(levelTokens) > 0 {
+		filter.Levels = runinspect.NormaliseLevels(levelTokens)
+	}
+	filtered := filter.Apply(lines)
+	if tail, _ := cmd.Flags().GetInt("tail"); tail > 0 {
+		filtered = runinspect.TailN(filtered, tail)
+	}
+
+	if jsonOut, _ := cmd.Flags().GetBool("json"); jsonOut {
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(map[string]any{
+			"task_id": taskID,
+			"lines":   filtered,
+			"total":   len(lines),
+			"matched": len(filtered),
+		})
+	}
+	return printLogLines(cmd, filtered, len(lines))
+}
+
+func printLogLines(cmd *cobra.Command, filtered []runinspect.LogLine, total int) error {
+	w := cmd.OutOrStdout()
+	if len(filtered) == 0 {
+		if total == 0 {
+			fmt.Fprintln(w, "(no log lines captured for this run)")
+			return nil
+		}
+		fmt.Fprintf(w, "(no lines matched out of %d total)\n", total)
+		return nil
+	}
+	for _, l := range filtered {
+		fmt.Fprintln(w, l.Raw)
+	}
+	if len(filtered) != total {
+		fmt.Fprintf(w, "\n%d of %d lines matched.\n", len(filtered), total)
+	}
+	return nil
+}
+
+// --- run network ----------------------------------------------------------
+
+var runNetworkCmd = &cobra.Command{
+	Use:   "network <task_id>",
+	Short: "Show captured HTTP traffic for a finished run",
+	Args:  cobra.ExactArgs(1),
+	Example: `  revyl run network 7aa6ce3c-...                          # host rollup
+  revyl run network 7aa6ce3c-... --host segment
+  revyl run network 7aa6ce3c-... --status 4xx,5xx
+  revyl run network 7aa6ce3c-... --grep anonymousId --body
+  revyl run network 7aa6ce3c-... --download --output ./net.json.gz`,
+	RunE: runNetworkRun,
+}
+
+func runNetworkRun(cmd *cobra.Command, args []string) error {
+	taskID := args[0]
+	report, _, err := loadReportOnly(cmd.Context(), cmd, taskID)
+	if err != nil {
+		return err
+	}
+	if report.NetworkRequestsURL == "" {
+		return fmt.Errorf("no network capture uploaded for this run")
+	}
+
+	download, _ := cmd.Flags().GetBool("download")
+	if download {
+		outPath, _ := cmd.Flags().GetString("output")
+		if outPath == "" {
+			outPath = "network_requests.json.gz"
+		}
+		written, err := runinspect.DownloadArtifactToFile(
+			cmd.Context(), report.NetworkRequestsURL, http.DefaultClient, outPath,
+		)
+		if err != nil {
+			return err
+		}
+		jsonOrPrint(cmd, map[string]any{
+			"task_id":       taskID,
+			"artifact":      "network_requests",
+			"downloaded_to": outPath,
+			"bytes":         written,
+		}, fmt.Sprintf("Downloaded network capture to %s (%d bytes)", outPath, written))
+		return nil
+	}
+
+	raw, err := runinspect.FetchArtifactBytes(
+		cmd.Context(), report.NetworkRequestsURL, http.DefaultClient,
+		runinspect.DefaultCacheDir(), taskID, "network_requests.json",
+		true,
+	)
+	if err != nil {
+		return err
+	}
+	cap, err := runinspect.ParseNetworkCapture(raw)
+	if err != nil {
+		return err
+	}
+
+	filter := runinspect.NetworkFilter{}
+	if hosts, _ := cmd.Flags().GetStringSlice("host"); len(hosts) > 0 {
+		for _, h := range hosts {
+			for _, part := range strings.Split(h, ",") {
+				if p := strings.TrimSpace(part); p != "" {
+					filter.HostGlobs = append(filter.HostGlobs, p)
+				}
+			}
+		}
+	}
+	if statuses, _ := cmd.Flags().GetStringSlice("status"); len(statuses) > 0 {
+		filter.Statuses = runinspect.ParseStatuses(statuses)
+	}
+	if failed, _ := cmd.Flags().GetBool("failed"); failed {
+		filter.FailedOnly = true
+	}
+	if pattern, _ := cmd.Flags().GetString("grep"); pattern != "" {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return fmt.Errorf("--grep: %w", err)
+		}
+		filter.Grep = re
+	}
+	if since, _ := cmd.Flags().GetFloat64("since"); since > 0 {
+		s := since
+		filter.SinceSeconds = &s
+	}
+	if until, _ := cmd.Flags().GetFloat64("until"); until > 0 {
+		u := until
+		filter.UntilSeconds = &u
+	}
+	filtered := filter.Apply(cap.Requests)
+
+	if jsonOut, _ := cmd.Flags().GetBool("json"); jsonOut {
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(map[string]any{
+			"task_id":  taskID,
+			"requests": filtered,
+			"summary":  cap.Summary,
+			"matched":  len(filtered),
+			"total":    len(cap.Requests),
+		})
+	}
+
+	noFilters := len(filter.HostGlobs) == 0 && len(filter.Statuses) == 0 &&
+		!filter.FailedOnly && filter.Grep == nil &&
+		filter.SinceSeconds == nil && filter.UntilSeconds == nil
+	withBody, _ := cmd.Flags().GetBool("body")
+	if noFilters {
+		return printNetworkHostRollup(cmd, cap)
+	}
+	return printNetworkRequests(cmd, filtered, len(cap.Requests), withBody)
+}
+
+func printNetworkHostRollup(cmd *cobra.Command, cap *runinspect.NetworkCapture) error {
+	w := cmd.OutOrStdout()
+	s := cap.Summary
+	fmt.Fprintf(w, "Requests: %d total, %d failed, %d bytes received\n",
+		s.TotalRequests, s.FailedRequests, s.TotalResponseBytes)
+	fmt.Fprintln(w)
+	rows := runinspect.RollupByHost(cap.Requests)
+	if len(rows) == 0 {
+		fmt.Fprintln(w, "(no requests captured)")
+		return nil
+	}
+	fmt.Fprintln(w, "HOSTS")
+	for _, row := range rows {
+		failed := ""
+		if row.FailedCount > 0 {
+			failed = fmt.Sprintf("  %d failed", row.FailedCount)
+		}
+		fmt.Fprintf(w, "  %4d  %-50s  %s%s\n",
+			row.Count, row.Host, formatBytes(row.BytesIn), failed)
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Filter:   --host glob | --status 4xx | --failed | --grep regex | --since N --until N")
+	fmt.Fprintln(w, "Inspect:  add --body to include request/response previews")
+	return nil
+}
+
+func printNetworkRequests(cmd *cobra.Command, reqs []runinspect.NetworkRequest, total int, withBody bool) error {
+	w := cmd.OutOrStdout()
+	if len(reqs) == 0 {
+		fmt.Fprintf(w, "(no requests matched out of %d total)\n", total)
+		return nil
+	}
+	for i, r := range reqs {
+		host := truncate(r.URL, 90)
+		statusLabel := fmt.Sprintf("%d", r.StatusCode)
+		if r.Error != nil {
+			statusLabel = "ERR"
+		}
+		fmt.Fprintf(w, "#%02d  t=%7.2fs  %-6s %-4s %s\n",
+			i, r.StartTimeS, statusLabel, r.Method, host)
+		if withBody {
+			if r.RequestBodyPreview != nil && *r.RequestBodyPreview != "" {
+				fmt.Fprintf(w, "       req:  %s\n", truncate(*r.RequestBodyPreview, 300))
+			}
+			if r.ResponseBodyPreview != nil && *r.ResponseBodyPreview != "" {
+				fmt.Fprintf(w, "       resp: %s\n", truncate(*r.ResponseBodyPreview, 300))
+			}
+			if r.Error != nil {
+				fmt.Fprintf(w, "       err:  %s\n", *r.Error)
+			}
+		}
+	}
+	if len(reqs) != total {
+		fmt.Fprintf(w, "\n%d of %d requests matched.\n", len(reqs), total)
+	}
+	return nil
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := n - len("…")
+	if cut <= 0 {
+		return "…"
+	}
+	// Walk back to a rune boundary so we don't split a multi-byte UTF-8 char.
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
+}
+
+func formatBytes(n int64) string {
+	switch {
+	case n >= 1024*1024:
+		return fmt.Sprintf("%.1f MiB", float64(n)/1024/1024)
+	case n >= 1024:
+		return fmt.Sprintf("%.1f KiB", float64(n)/1024)
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+}
+
+// --- run perf -------------------------------------------------------------
+
+var runPerfCmd = &cobra.Command{
+	Use:   "perf <task_id>",
+	Short: "Show hardware-metrics summary (CPU, memory) for a finished run",
+	Args:  cobra.ExactArgs(1),
+	Example: `  revyl run perf 7aa6ce3c-...
+  revyl run perf 7aa6ce3c-... --metric cpu --json
+  revyl run perf 7aa6ce3c-... --download --output ./perf.json.gz`,
+	RunE: runPerfRun,
+}
+
+func runPerfRun(cmd *cobra.Command, args []string) error {
+	taskID := args[0]
+	report, _, err := loadReportOnly(cmd.Context(), cmd, taskID)
+	if err != nil {
+		return err
+	}
+	if report.HardwareMetricsURL == "" {
+		return fmt.Errorf("no hardware metrics uploaded for this run")
+	}
+
+	download, _ := cmd.Flags().GetBool("download")
+	if download {
+		outPath, _ := cmd.Flags().GetString("output")
+		if outPath == "" {
+			outPath = "hardware_metrics.json.gz"
+		}
+		written, err := runinspect.DownloadArtifactToFile(
+			cmd.Context(), report.HardwareMetricsURL, http.DefaultClient, outPath,
+		)
+		if err != nil {
+			return err
+		}
+		jsonOrPrint(cmd, map[string]any{
+			"task_id":       taskID,
+			"artifact":      "hardware_metrics",
+			"downloaded_to": outPath,
+			"bytes":         written,
+		}, fmt.Sprintf("Downloaded hardware metrics to %s (%d bytes)", outPath, written))
+		return nil
+	}
+
+	raw, err := runinspect.FetchArtifactBytes(
+		cmd.Context(), report.HardwareMetricsURL, http.DefaultClient,
+		runinspect.DefaultCacheDir(), taskID, "hardware_metrics.json",
+		true,
+	)
+	if err != nil {
+		return err
+	}
+	cap, err := runinspect.ParsePerfCapture(raw)
+	if err != nil {
+		return err
+	}
+	cpu, mem, cpuOK, memOK := runinspect.ComputeMetricStats(cap)
+
+	if jsonOut, _ := cmd.Flags().GetBool("json"); jsonOut {
+		out := map[string]any{
+			"task_id": taskID,
+			"summary": cap.Summary,
+		}
+		if cpuOK {
+			out["cpu"] = cpu
+		}
+		if memOK {
+			out["memory"] = mem
+		}
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(out)
+	}
+	metric, _ := cmd.Flags().GetString("metric")
+	return printPerfStats(cmd, cap, cpu, mem, cpuOK, memOK, metric)
+}
+
+func printPerfStats(
+	cmd *cobra.Command,
+	cap *runinspect.PerfCapture,
+	cpu, mem runinspect.MetricStats,
+	cpuOK, memOK bool,
+	metric string,
+) error {
+	w := cmd.OutOrStdout()
+	s := cap.Summary
+	if s.SampleCount != nil {
+		fmt.Fprintf(w, "Samples:    %d", *s.SampleCount)
+		if s.DurationS != nil {
+			fmt.Fprintf(w, " over %.1fs", *s.DurationS)
+		}
+		fmt.Fprintln(w)
+	}
+	if s.AvgFPS != nil || s.MinFPS != nil {
+		fmt.Fprint(w, "FPS:       ")
+		if s.AvgFPS != nil {
+			fmt.Fprintf(w, " avg=%.1f", *s.AvgFPS)
+		}
+		if s.MinFPS != nil {
+			fmt.Fprintf(w, " min=%.1f", *s.MinFPS)
+		}
+		fmt.Fprintln(w)
+	}
+	fmt.Fprintln(w)
+
+	want := strings.ToLower(strings.TrimSpace(metric))
+	showCPU := want == "" || want == "cpu"
+	showMem := want == "" || want == "mem" || want == "memory"
+
+	if showCPU {
+		if cpuOK {
+			printMetricRow(w, cpu)
+		} else {
+			fmt.Fprintln(w, "CPU %:    (no samples)")
+		}
+	}
+	if showMem {
+		if memOK {
+			printMetricRow(w, mem)
+		} else {
+			fmt.Fprintln(w, "Mem RSS:  (no samples)")
+		}
+	}
+
+	if len(cap.AppEvents) > 0 && want == "" {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "APP EVENTS")
+		for _, e := range cap.AppEvents {
+			fmt.Fprintf(w, "  t=%7.2fs  %s  %s\n", e.WallTimeS, e.Type, truncate(e.Data, 80))
+		}
+	}
+	return nil
+}
+
+func printMetricRow(w interface{ Write(p []byte) (int, error) }, m runinspect.MetricStats) {
+	fmt.Fprintf(w,
+		"%-9s min=%7.1f  p50=%7.1f  p95=%7.1f  max=%7.1f %s  (avg %.1f, %d samples, peak at t=%.1fs)\n",
+		m.Label+":", m.Min, m.P50, m.P95, m.Max, m.Unit, m.Avg, m.Samples, m.PeakWallTimeS,
+	)
+}
+
+// --- run trace ------------------------------------------------------------
+
+var runTraceCmd = &cobra.Command{
+	Use:   "trace <task_id>",
+	Short: "Download the captured Perfetto trace and print how to open it",
+	Args:  cobra.ExactArgs(1),
+	Long: `Perfetto traces are binary blobs only useful when loaded into the
+Perfetto UI, so this command always downloads — there is no pretty-print
+option. Drag the saved file into https://ui.perfetto.dev to inspect.`,
+	Example: `  revyl run trace 7aa6ce3c-...
+  revyl run trace 7aa6ce3c-... --output ./capture.perfetto-trace.gz`,
+	RunE: runTraceRun,
+}
+
+func runTraceRun(cmd *cobra.Command, args []string) error {
+	taskID := args[0]
+	report, _, err := loadReportOnly(cmd.Context(), cmd, taskID)
+	if err != nil {
+		return err
+	}
+	if report.PerfettoTraceURL == "" {
+		return fmt.Errorf("no perfetto trace uploaded for this run")
+	}
+	outPath, _ := cmd.Flags().GetString("output")
+	if outPath == "" {
+		shortID := taskID
+		if len(shortID) > 8 {
+			shortID = shortID[:8]
+		}
+		outPath = fmt.Sprintf("perfetto_trace_%s.perfetto-trace.gz", shortID)
+	}
+	written, err := runinspect.DownloadArtifactToFile(
+		cmd.Context(), report.PerfettoTraceURL, http.DefaultClient, outPath,
+	)
+	if err != nil {
+		return err
+	}
+	jsonOrPrint(cmd, map[string]any{
+		"task_id":       taskID,
+		"artifact":      "perfetto_trace",
+		"downloaded_to": outPath,
+		"bytes":         written,
+		"open_with":     "https://ui.perfetto.dev",
+	}, fmt.Sprintf("Saved to %s (%d bytes)\nOpen with: https://ui.perfetto.dev (drag the file in)", outPath, written))
+	return nil
+}
+
 // --- shared plumbing ------------------------------------------------------
 
 // loadRunArtifacts wraps runinspect.LoadArtifacts with the CLI's
 // auth-key + dev-mode flag plumbing. Every `revyl run *` subcommand
-// calls this so the cache, timeout, and error mapping live in the
-// runinspect package (single owner, shared with the MCP tools).
+// that needs the device-state JSONL (summary, state) calls this so
+// the cache, timeout, and error mapping live in the runinspect package
+// (single owner, shared with the MCP tools).
 func loadRunArtifacts(
 	ctx context.Context,
 	cmd *cobra.Command,
@@ -194,6 +671,34 @@ func loadRunArtifacts(
 	devMode, _ := cmd.Flags().GetBool("dev")
 	client := api.NewClientWithDevMode(apiKey, devMode)
 	return runinspect.LoadArtifacts(ctx, client, taskID)
+}
+
+// loadReportOnly is the no-device-state cousin of loadRunArtifacts.
+// Logs / network / perf / trace only need the presigned-URL metadata
+// from the report — fetching device-state JSONL on top would be a
+// wasted ~10 MiB download for every invocation.
+func loadReportOnly(
+	ctx context.Context,
+	cmd *cobra.Command,
+	taskID string,
+) (*runinspect.Report, *api.Client, error) {
+	apiKey, err := getAPIKey()
+	if err != nil {
+		return nil, nil, err
+	}
+	devMode, _ := cmd.Flags().GetBool("dev")
+	client := api.NewClientWithDevMode(apiKey, devMode)
+	report, err := runinspect.FetchReport(ctx, client, taskID)
+	if err != nil {
+		if errors.Is(err, runinspect.ErrReportNotFound) {
+			return nil, nil, fmt.Errorf(
+				"no report found for task %s — check the task_id and whether the run has completed",
+				taskID,
+			)
+		}
+		return nil, nil, err
+	}
+	return report, client, nil
 }
 
 // --- pretty printers ------------------------------------------------------
@@ -260,96 +765,25 @@ func printSummary(cmd *cobra.Command, s runinspect.Summary) error {
 		for _, f := range s.IdentityHighlights {
 			fmt.Fprintf(w, "  %-22s %v\n", f.Label+":", formatIdentityValue(f.Value))
 		}
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "  Full identity: `revyl run identity <task_id>`")
 	}
-	return nil
-}
 
-func printIdentity(cmd *cobra.Command, fields []runinspect.IdentityField) error {
-	w := cmd.OutOrStdout()
-	if len(fields) == 0 {
-		fmt.Fprintln(w, "No identity fields detected in the captured state.")
-		return nil
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "MORE")
+	if a.DeviceStateAvailable {
+		fmt.Fprintf(w, "  state:    revyl run state    %s\n", s.TaskID)
 	}
-	byKind := groupIdentityByKind(fields)
-	order := []runinspect.IdentityKind{
-		runinspect.IdentityKindUser,
-		runinspect.IdentityKindEmail,
-		runinspect.IdentityKindUsername,
-		runinspect.IdentityKindRole,
-		runinspect.IdentityKindAccount,
-		runinspect.IdentityKindOrg,
-		runinspect.IdentityKindVendor,
+	if a.NetworkRequestsAvailable {
+		fmt.Fprintf(w, "  network:  revyl run network  %s\n", s.TaskID)
 	}
-	headers := map[runinspect.IdentityKind]string{
-		runinspect.IdentityKindUser:     "USER",
-		runinspect.IdentityKindEmail:    "EMAIL",
-		runinspect.IdentityKindUsername: "USERNAME",
-		runinspect.IdentityKindRole:     "ROLE FLAGS",
-		runinspect.IdentityKindAccount:  "ACCOUNT",
-		runinspect.IdentityKindOrg:      "ORG / WORKSPACE",
-		runinspect.IdentityKindVendor:   "VENDOR IDS (for vendor-dashboard pivot)",
+	if a.HardwareMetricsAvailable {
+		fmt.Fprintf(w, "  perf:     revyl run perf     %s\n", s.TaskID)
 	}
-	for _, kind := range order {
-		fields := byKind[kind]
-		if len(fields) == 0 {
-			continue
-		}
-		fmt.Fprintln(w, headers[kind])
-		for _, f := range fields {
-			fmt.Fprintf(w, "  %-32s %v\n", f.Label+":", formatIdentityValue(f.Value))
-			if f.Source.Path != "" {
-				fmt.Fprintf(w, "    source: %s:%s\n", f.Source.Path, f.Source.KeyPath)
-			}
-		}
-		fmt.Fprintln(w)
+	if a.PerfettoTraceAvailable {
+		fmt.Fprintf(w, "  trace:    revyl run trace    %s\n", s.TaskID)
 	}
-	return nil
-}
-
-func printTraces(cmd *cobra.Command, traces []runinspect.TraceRecord) error {
-	w := cmd.OutOrStdout()
-	if len(traces) == 0 {
-		fmt.Fprintln(w, "No backend-pivotable trace IDs found in the captured state.")
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "If the app uses Sentry and you expected traces here, check:")
-		fmt.Fprintln(w, "  - Did the SDK actually capture events during the run? Check the report's failure mode.")
-		fmt.Fprintln(w, "  - Was the test bot blocked before any networked action ran?")
-		fmt.Fprintln(w, "  - Sentry envelopes auto-delete after upload; very short runs may upload before our sampler captured.")
-		return nil
-	}
-	for _, r := range traces {
-		fmt.Fprintf(w, "%s\n", r.Value)
-		fmt.Fprintf(w, "  vendor:      %s\n", r.Vendor)
-		fmt.Fprintf(w, "  kind:        %s (%s)\n", r.Kind, r.Label)
-		if r.Transaction != "" {
-			fmt.Fprintf(w, "  transaction: %s\n", r.Transaction)
-		}
-		if len(r.Related) > 0 {
-			// Stable ordering for human-friendly diffs across runs.
-			keys := make([]string, 0, len(r.Related))
-			for k := range r.Related {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			for _, k := range keys {
-				if r.Related[k] == r.Value {
-					continue
-				}
-				fmt.Fprintf(w, "  %s:   %s\n", k, r.Related[k])
-			}
-		}
-		fmt.Fprintf(w, "  steps:       %d..%d\n", r.FirstSeenStep, r.LastSeenStep)
-		if r.FirstTimestamp != "" {
-			fmt.Fprintf(w, "  timestamp:   %s\n", r.FirstTimestamp)
-		}
-		if r.Source.Path != "" {
-			fmt.Fprintf(w, "  source:      %s\n", r.Source.Path)
-		}
-		fmt.Fprintln(w)
-	}
-	fmt.Fprintln(w, "Paste any of these into your Sentry org's search (or your tracing backend) to correlate this run.")
+	// Device logs live behind a dedicated endpoint; the logs command
+	// handles the "not uploaded" case itself, so suggest it unconditionally.
+	fmt.Fprintf(w, "  logs:     revyl run logs     %s\n", s.TaskID)
 	return nil
 }
 
@@ -497,33 +931,63 @@ func formatPlistValueOneline(v interface{}) string {
 	}
 }
 
-func groupIdentityByKind(fields []runinspect.IdentityField) map[runinspect.IdentityKind][]runinspect.IdentityField {
-	out := make(map[runinspect.IdentityKind][]runinspect.IdentityField)
-	for _, f := range fields {
-		out[f.Kind] = append(out[f.Kind], f)
-	}
-	return out
-}
-
 func init() {
 	runCmd.PersistentFlags().Bool("json", false, "Emit raw JSON instead of pretty-printed output")
 	runCmd.PersistentFlags().Bool("dev", false, "Use dev/staging backend (default: production)")
-
-	runIdentityCmd.Flags().Int("at-step", 0,
-		"Only show identity visible as of this 1-indexed step (default: all)")
 
 	runStateCmd.Flags().String("path", "",
 		"Inspect this captured path (plist or sqlite). Omit to list all paths.")
 	runStateCmd.Flags().Int("at-step", 0,
 		"Show state as of this 1-indexed step (default: latest)")
+	runStateCmd.Flags().Bool("download", false,
+		"Download the raw .jsonl.gz artifact instead of inspecting it")
+	runStateCmd.Flags().String("output", "",
+		"Output path for --download (default: ./device_state.jsonl.gz)")
 
-	runTracesCmd.Flags().Int("at-step", 0,
-		"Only show traces visible as of this 1-indexed step (default: all)")
-	runTracesCmd.Flags().StringSlice("vendor", nil,
-		"Restrict to specific vendors (currently only 'sentry' is supported)")
+	runLogsCmd.Flags().String("grep", "",
+		"Regexp filter applied to each log line (Go re2 syntax)")
+	runLogsCmd.Flags().StringSlice("level", nil,
+		"Comma-separated levels to keep, e.g. warn,error (V/D/I/W/E/F and synonyms)")
+	runLogsCmd.Flags().Int("tail", 0,
+		"Show only the last N lines (after filtering)")
+	runLogsCmd.Flags().Bool("download", false,
+		"Download the raw .txt.gz artifact instead of printing")
+	runLogsCmd.Flags().String("output", "",
+		"Output path for --download (default: ./<server-suggested-filename>)")
+
+	runNetworkCmd.Flags().StringSlice("host", nil,
+		"Filter to requests whose URL host matches this glob/substring (comma-separated; repeatable)")
+	runNetworkCmd.Flags().StringSlice("status", nil,
+		"Filter to specific status codes or buckets, e.g. 200,404 or 4xx,5xx")
+	runNetworkCmd.Flags().Bool("failed", false,
+		"Only show requests with a transport error or HTTP status >= 400")
+	runNetworkCmd.Flags().String("grep", "",
+		"Regexp filter applied to URL + body previews (Go re2 syntax)")
+	runNetworkCmd.Flags().Float64("since", 0,
+		"Only show requests starting after N seconds from run start")
+	runNetworkCmd.Flags().Float64("until", 0,
+		"Only show requests starting before N seconds from run start")
+	runNetworkCmd.Flags().Bool("body", false,
+		"Include request/response body previews under each matched entry")
+	runNetworkCmd.Flags().Bool("download", false,
+		"Download the raw .json.gz artifact instead of printing")
+	runNetworkCmd.Flags().String("output", "",
+		"Output path for --download (default: ./network_requests.json.gz)")
+
+	runPerfCmd.Flags().String("metric", "",
+		"Narrow to one series: cpu | memory (default: show both)")
+	runPerfCmd.Flags().Bool("download", false,
+		"Download the raw .json.gz artifact instead of printing")
+	runPerfCmd.Flags().String("output", "",
+		"Output path for --download (default: ./hardware_metrics.json.gz)")
+
+	runTraceCmd.Flags().String("output", "",
+		"Output path for the saved trace (default: ./perfetto_trace_<short>.perfetto-trace.gz)")
 
 	runCmd.AddCommand(runSummaryCmd)
-	runCmd.AddCommand(runIdentityCmd)
 	runCmd.AddCommand(runStateCmd)
-	runCmd.AddCommand(runTracesCmd)
+	runCmd.AddCommand(runLogsCmd)
+	runCmd.AddCommand(runNetworkCmd)
+	runCmd.AddCommand(runPerfCmd)
+	runCmd.AddCommand(runTraceCmd)
 }
