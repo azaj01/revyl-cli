@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/revyl/cli/internal/analytics"
 	"github.com/revyl/cli/internal/api"
 	"github.com/revyl/cli/internal/auth"
 	"github.com/revyl/cli/internal/build"
@@ -201,10 +202,30 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	}
 
 	if !result.Healthy {
-		return fmt.Errorf("health check failed")
+		return analytics.CompletedWithExitCode(fmt.Errorf("health check failed"), analytics.CommandCompletion{
+			ExitCode:     1,
+			Domain:       "doctor",
+			DomainStatus: "unhealthy",
+			Properties: map[string]interface{}{
+				"doctor_check_count":   len(result.Checks),
+				"doctor_issue_count":   result.Issues,
+				"doctor_error_count":   countDoctorChecks(result.Checks, "error"),
+				"doctor_warning_count": countDoctorChecks(result.Checks, "warning"),
+			},
+		})
 	}
 
 	return nil
+}
+
+func countDoctorChecks(checks []DoctorCheck, status string) int {
+	count := 0
+	for _, check := range checks {
+		if check.Status == status {
+			count++
+		}
+	}
+	return count
 }
 
 // checkProjectAuthOrgMatch checks whether the cwd project is bound to the

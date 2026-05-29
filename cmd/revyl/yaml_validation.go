@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/revyl/cli/internal/analytics"
 	"github.com/revyl/cli/internal/api"
 	"github.com/revyl/cli/internal/ui"
 )
@@ -45,12 +46,17 @@ func validateYAMLFilesWithBackend(cmd *cobra.Command, files []string) error {
 	jsonOutput, _ := cmd.Root().PersistentFlags().GetBool("json")
 
 	hasErrors := false
+	invalidFiles := 0
+	totalErrors := 0
+	totalWarnings := 0
 	results := make([]yamlValidationFileResult, 0, len(files))
 	for _, file := range files {
 		result, err := validateYAMLFileWithBackend(cmd.Context(), client, file)
 		if err != nil {
 			return err
 		}
+		totalErrors += result.Errors
+		totalWarnings += result.Warnings
 		if jsonOutput {
 			results = append(results, yamlValidationFileResult{
 				File:     file,
@@ -64,6 +70,7 @@ func validateYAMLFilesWithBackend(cmd *cobra.Command, files []string) error {
 		}
 		if !result.IsValid {
 			hasErrors = true
+			invalidFiles++
 		}
 	}
 
@@ -77,7 +84,17 @@ func validateYAMLFilesWithBackend(cmd *cobra.Command, files []string) error {
 	}
 
 	if hasErrors {
-		return fmt.Errorf("YAML validation failed")
+		return analytics.CompletedWithExitCode(fmt.Errorf("YAML validation failed"), analytics.CommandCompletion{
+			ExitCode:     1,
+			Domain:       "test_validation",
+			DomainStatus: "invalid",
+			Properties: map[string]interface{}{
+				"validation_file_count":    len(files),
+				"validation_invalid_files": invalidFiles,
+				"validation_error_count":   totalErrors,
+				"validation_warning_count": totalWarnings,
+			},
+		})
 	}
 	return nil
 }

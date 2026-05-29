@@ -18,6 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/revyl/cli/internal/analytics"
 	"github.com/revyl/cli/internal/api"
 	"github.com/revyl/cli/internal/build"
 	"github.com/revyl/cli/internal/config"
@@ -331,7 +332,7 @@ func runRemoteBuildWithOptions(cmd *cobra.Command, apiKey string, opts remoteBui
 		if opts.JSON {
 			printRemoteBuildJSON(remoteBuildFailureJSON(resolved, jobID, status, err))
 		}
-		return err
+		return completedRemoteBuildError(resolved, jobID, status, err)
 	}
 	if opts.JSON {
 		printRemoteBuildJSON(remoteBuildSuccessJSON(resolved, jobID, status))
@@ -445,10 +446,16 @@ func runBuildStatus(cmd *cobra.Command, args []string) error {
 			enc.SetIndent("", "  ")
 			_ = enc.Encode(status)
 		}
+		if buildStatusFollow {
+			return completedRemoteBuildStatusError(jobID, status, err)
+		}
 		return err
 	}
 	if status != nil && !buildStatusFollow {
 		printRemoteBuildStatusSummary(devMode, jobID, status)
+	}
+	if buildStatusFollow {
+		return completedRemoteBuildStatusError(jobID, status, err)
 	}
 	return err
 }
@@ -788,6 +795,71 @@ func remoteBuildFailureJSON(resolved remoteBuildPlatformConfig, jobID string, st
 	}
 	result.PhaseTimings = remoteBuildPhaseTimings(status)
 	return result
+}
+
+func completedRemoteBuildError(resolved remoteBuildPlatformConfig, jobID string, status *api.RemoteBuildStatusResponse, err error) error {
+	if err == nil {
+		return nil
+	}
+	completion, ok := remoteBuildCompletion(jobID, status)
+	if !ok {
+		return err
+	}
+	if resolved.Platform != "" {
+		completion.Properties["remote_build_platform"] = resolved.Platform
+	}
+	if resolved.AppID != "" {
+		completion.Properties["remote_build_app_id"] = resolved.AppID
+	}
+	return analytics.CompletedWithExitCode(err, completion)
+}
+
+func completedRemoteBuildStatusError(jobID string, status *api.RemoteBuildStatusResponse, err error) error {
+	if err == nil {
+		return nil
+	}
+	completion, ok := remoteBuildCompletion(jobID, status)
+	if !ok {
+		return err
+	}
+	return analytics.CompletedWithExitCode(err, completion)
+}
+
+func remoteBuildCompletion(jobID string, status *api.RemoteBuildStatusResponse) (analytics.CommandCompletion, bool) {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" || status == nil {
+		return analytics.CommandCompletion{}, false
+	}
+	statusText := strings.TrimSpace(status.Status)
+	switch statusText {
+	case "failed", "cancelled":
+	default:
+		return analytics.CommandCompletion{}, false
+	}
+
+	props := map[string]interface{}{
+		"remote_build_job_id": jobID,
+		"remote_build_status": statusText,
+	}
+	if status.Phase != nil && strings.TrimSpace(*status.Phase) != "" {
+		props["remote_build_phase"] = strings.TrimSpace(*status.Phase)
+	}
+	if status.VersionId != nil && strings.TrimSpace(*status.VersionId) != "" {
+		props["remote_build_version_id"] = strings.TrimSpace(*status.VersionId)
+	}
+	if status.AppId != nil && strings.TrimSpace(*status.AppId) != "" {
+		props["remote_build_app_id"] = strings.TrimSpace(*status.AppId)
+	}
+	if status.Platform != nil && strings.TrimSpace(*status.Platform) != "" {
+		props["remote_build_platform"] = strings.TrimSpace(*status.Platform)
+	}
+
+	return analytics.CommandCompletion{
+		ExitCode:     1,
+		Domain:       "remote_build",
+		DomainStatus: statusText,
+		Properties:   props,
+	}, true
 }
 
 func remoteBuildPhaseTimings(status *api.RemoteBuildStatusResponse) []api.RemoteBuildPhaseTiming {

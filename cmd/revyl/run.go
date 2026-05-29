@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
+	"github.com/revyl/cli/internal/analytics"
 	"github.com/revyl/cli/internal/api"
 	"github.com/revyl/cli/internal/build"
 	"github.com/revyl/cli/internal/buildselection"
@@ -541,15 +542,15 @@ func runTestExec(cmd *cobra.Command, args []string) error {
 	if !result.Success {
 		switch result.Status {
 		case "cancelled":
-			return fmt.Errorf("test was cancelled")
+			return completedTestRunError(result, fmt.Errorf("test was cancelled"))
 		case "timeout":
-			return fmt.Errorf("test timed out")
+			return completedTestRunError(result, fmt.Errorf("test timed out"))
 		default:
-			return fmt.Errorf("test failed")
+			return completedTestRunError(result, fmt.Errorf("test failed"))
 		}
 	}
 
-	return nil
+	return completedTestRunError(result, nil)
 }
 
 // outputTestResultJSON outputs test results as JSON for CI/CD integration.
@@ -990,18 +991,18 @@ func runWorkflowExec(cmd *cobra.Command, args []string) error {
 		// Return appropriate error based on status
 		switch result.Status {
 		case "cancelled":
-			return fmt.Errorf("workflow was cancelled")
+			return completedWorkflowRunError(result, fmt.Errorf("workflow was cancelled"))
 		case "timeout":
-			return fmt.Errorf("workflow timed out")
+			return completedWorkflowRunError(result, fmt.Errorf("workflow timed out"))
 		default:
 			if result.FailedTests > 0 {
-				return fmt.Errorf("workflow had %d failed tests", result.FailedTests)
+				return completedWorkflowRunError(result, fmt.Errorf("workflow had %d failed tests", result.FailedTests))
 			}
-			return fmt.Errorf("workflow failed with status: %s", result.Status)
+			return completedWorkflowRunError(result, fmt.Errorf("workflow failed with status: %s", result.Status))
 		}
 	}
 
-	return nil
+	return completedWorkflowRunError(result, nil)
 }
 
 // outputWorkflowResultJSON outputs workflow results as JSON for CI/CD integration.
@@ -1043,6 +1044,62 @@ func outputWorkflowResultJSON(result *execution.RunWorkflowResult) {
 
 	data, _ := json.MarshalIndent(output, "", "  ")
 	fmt.Println(string(data))
+}
+
+func completedTestRunError(result *execution.RunTestResult, err error) error {
+	if err == nil {
+		return nil
+	}
+	if result == nil || strings.TrimSpace(result.TaskID) == "" {
+		return err
+	}
+
+	return analytics.CompletedWithExitCode(err, analytics.CommandCompletion{
+		ExitCode:     1,
+		Domain:       "test_run",
+		DomainStatus: failedDomainStatus(result.Status),
+		Properties: map[string]interface{}{
+			"test_task_id":  result.TaskID,
+			"test_id":       result.TestID,
+			"test_status":   strings.TrimSpace(result.Status),
+			"test_success":  result.Success,
+			"test_duration": result.Duration,
+		},
+	})
+}
+
+func completedWorkflowRunError(result *execution.RunWorkflowResult, err error) error {
+	if err == nil {
+		return nil
+	}
+	if result == nil || strings.TrimSpace(result.TaskID) == "" {
+		return err
+	}
+
+	return analytics.CompletedWithExitCode(err, analytics.CommandCompletion{
+		ExitCode:     1,
+		Domain:       "workflow_run",
+		DomainStatus: failedDomainStatus(result.Status),
+		Properties: map[string]interface{}{
+			"workflow_task_id":         result.TaskID,
+			"workflow_id":              result.WorkflowID,
+			"workflow_status":          strings.TrimSpace(result.Status),
+			"workflow_success":         result.Success,
+			"workflow_duration":        result.Duration,
+			"workflow_total_tests":     result.TotalTests,
+			"workflow_completed_tests": result.CompletedTests,
+			"workflow_passed_tests":    result.PassedTests,
+			"workflow_failed_tests":    result.FailedTests,
+		},
+	})
+}
+
+func failedDomainStatus(status string) string {
+	status = strings.TrimSpace(status)
+	if status == "" || status == "completed" {
+		return "failed"
+	}
+	return status
 }
 
 // runTestWithHotReload executes a test in hot reload mode.
@@ -1432,15 +1489,15 @@ func runTestWithHotReload(cmd *cobra.Command, args []string) error {
 	if !testResult.Success {
 		switch testResult.Status {
 		case "cancelled":
-			return fmt.Errorf("test was cancelled")
+			return completedTestRunError(testResult, fmt.Errorf("test was cancelled"))
 		case "timeout":
-			return fmt.Errorf("test timed out")
+			return completedTestRunError(testResult, fmt.Errorf("test timed out"))
 		default:
-			return fmt.Errorf("test failed")
+			return completedTestRunError(testResult, fmt.Errorf("test failed"))
 		}
 	}
 
-	return nil
+	return completedTestRunError(testResult, nil)
 }
 
 // resolveDeviceSelection resolves the target device pair from flags or an

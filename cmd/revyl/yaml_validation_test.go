@@ -2,11 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/revyl/cli/internal/analytics"
 )
 
 func TestTestValidateCommandUsesBackendValidation(t *testing.T) {
@@ -81,5 +84,22 @@ func TestTestValidateCommandFailsOnBackendDiagnostics(t *testing.T) {
 	err := testValidateCmd.RunE(cmd, []string{path})
 	if err == nil {
 		t.Fatal("RunE() error = nil, want validation failure")
+	}
+	var completed *analytics.CompletedError
+	if !errors.As(err, &completed) {
+		t.Fatalf("RunE() error = %T, want CompletedError", err)
+	}
+	completion := completed.Completion()
+	if completion.Domain != "test_validation" || completion.DomainStatus != "invalid" || completion.ExitCode != 1 {
+		t.Fatalf("completion = %#v, want invalid test validation completion", completion)
+	}
+	if got := completion.Properties["validation_file_count"]; got != 1 {
+		t.Fatalf("validation_file_count = %v, want 1", got)
+	}
+	if got := completion.Properties["validation_invalid_files"]; got != 1 {
+		t.Fatalf("validation_invalid_files = %v, want 1", got)
+	}
+	if got := completion.Properties["validation_error_count"]; got != 1 {
+		t.Fatalf("validation_error_count = %v, want 1", got)
 	}
 }

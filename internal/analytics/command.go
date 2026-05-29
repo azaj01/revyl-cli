@@ -1,6 +1,7 @@
 package analytics
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,48 @@ type CommandRun struct {
 	outputTail  []map[string]interface{}
 }
 
+// CommandCompletion describes a command that analytically completed even if it
+// intentionally returns a non-zero exit code for callers such as CI.
+type CommandCompletion struct {
+	ExitCode     int
+	Domain       string
+	DomainStatus string
+	Properties   map[string]interface{}
+}
+
+type CompletedError struct {
+	err        error
+	completion CommandCompletion
+}
+
+func CompletedWithExitCode(err error, completion CommandCompletion) error {
+	if err == nil {
+		err = errors.New("command completed with non-zero exit")
+	}
+	return &CompletedError{err: err, completion: completion}
+}
+
+func (e *CompletedError) Error() string {
+	if e == nil || e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e *CompletedError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func (e *CompletedError) Completion() CommandCompletion {
+	if e == nil {
+		return CommandCompletion{}
+	}
+	return copyCommandCompletion(e.completion)
+}
+
 func (r *Recorder) StartCommand(cmd *cobra.Command, args []string) *CommandRun {
 	if !r.Enabled() || cmd == nil {
 		return nil
@@ -46,12 +89,30 @@ func (r *CommandRun) Complete(err error) {
 	props := map[string]interface{}{
 		"duration_ms": time.Since(r.startedAt).Milliseconds(),
 	}
+	var completedErr *CompletedError
+	if errors.As(err, &completedErr) {
+		completion := completedErr.Completion()
+		props["exit_code"] = completion.ExitCode
+		if domain := strings.TrimSpace(completion.Domain); domain != "" {
+			props["domain"] = domain
+		}
+		if status := strings.TrimSpace(completion.DomainStatus); status != "" {
+			props["domain_status"] = status
+		}
+		for key, value := range completion.Properties {
+			props[key] = value
+		}
+		r.capture("cli_command_completed", props)
+		return
+	}
 	if err != nil {
 		props["error"] = true
+		props["exit_code"] = 1
 		props["error_message"] = sanitizeString(err.Error())
 		props["output_tail"] = r.outputTailSnapshot()
 		r.capture("cli_command_failed", props)
 	} else {
+		props["exit_code"] = 0
 		r.capture("cli_command_completed", props)
 	}
 }
@@ -106,6 +167,17 @@ func (r *CommandRun) outputTailSnapshot() []map[string]interface{} {
 	out := make([]map[string]interface{}, len(r.outputTail))
 	copy(out, r.outputTail)
 	return out
+}
+
+func copyCommandCompletion(completion CommandCompletion) CommandCompletion {
+	copied := completion
+	if len(completion.Properties) > 0 {
+		copied.Properties = make(map[string]interface{}, len(completion.Properties))
+		for key, value := range completion.Properties {
+			copied.Properties[key] = value
+		}
+	}
+	return copied
 }
 
 type TelemetryPayload struct {

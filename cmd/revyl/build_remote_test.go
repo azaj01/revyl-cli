@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/revyl/cli/internal/analytics"
 	"github.com/revyl/cli/internal/api"
 	"github.com/revyl/cli/internal/config"
 )
@@ -323,5 +325,58 @@ func TestRemoteBuildFailureJSONIncludesDiscoveryGuidance(t *testing.T) {
 	}
 	if len(result.PhaseTimings) != 1 || result.PhaseTimings[0].Phase != "artifact" {
 		t.Fatalf("PhaseTimings = %#v, want artifact timing", result.PhaseTimings)
+	}
+}
+
+func TestCompletedRemoteBuildStatusErrorWrapsTerminalFailure(t *testing.T) {
+	phase := "build"
+	platform := "android"
+	appID := "app-android"
+	versionID := "version-123"
+	err := completedRemoteBuildStatusError("job-1", &api.RemoteBuildStatusResponse{
+		Status:    "failed",
+		Phase:     &phase,
+		Platform:  &platform,
+		AppId:     &appID,
+		VersionId: &versionID,
+	}, errors.New("remote build failed"))
+
+	var completed *analytics.CompletedError
+	if !errors.As(err, &completed) {
+		t.Fatalf("error = %T, want CompletedError", err)
+	}
+	completion := completed.Completion()
+	if completion.Domain != "remote_build" || completion.DomainStatus != "failed" || completion.ExitCode != 1 {
+		t.Fatalf("completion = %#v, want failed remote build completion", completion)
+	}
+	if got := completion.Properties["remote_build_job_id"]; got != "job-1" {
+		t.Fatalf("remote_build_job_id = %v, want job-1", got)
+	}
+	if got := completion.Properties["remote_build_platform"]; got != "android" {
+		t.Fatalf("remote_build_platform = %v, want android", got)
+	}
+	if got := completion.Properties["remote_build_app_id"]; got != "app-android" {
+		t.Fatalf("remote_build_app_id = %v, want app-android", got)
+	}
+	if got := completion.Properties["remote_build_version_id"]; got != "version-123" {
+		t.Fatalf("remote_build_version_id = %v, want version-123", got)
+	}
+	if got := completion.Properties["remote_build_phase"]; got != "build" {
+		t.Fatalf("remote_build_phase = %v, want build", got)
+	}
+}
+
+func TestCompletedRemoteBuildStatusErrorKeepsNonTerminalErrorsAsCommandFailures(t *testing.T) {
+	original := errors.New("remote build polling timed out")
+	err := completedRemoteBuildStatusError("job-1", &api.RemoteBuildStatusResponse{
+		Status: "running",
+	}, original)
+
+	if err != original {
+		t.Fatalf("error = %v, want original error", err)
+	}
+	var completed *analytics.CompletedError
+	if errors.As(err, &completed) {
+		t.Fatalf("running status should not be wrapped as completed domain result")
 	}
 }
