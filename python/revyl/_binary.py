@@ -10,6 +10,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import urllib.request
 from pathlib import Path
@@ -159,17 +160,34 @@ def _is_verified_binary(binary_path: Path) -> bool:
     return actual == expected
 
 
+def _python_wrapper_dirs() -> set[Path]:
+    """Return directories that may contain Python-generated console wrappers."""
+    executable_dir = Path(sys.executable).resolve().parent
+    wrapper_dirs = {executable_dir}
+
+    scripts_dir = sysconfig.get_path("scripts")
+    if scripts_dir:
+        wrapper_dirs.add(Path(scripts_dir).resolve())
+
+    if sys.platform == "win32":
+        wrapper_dirs.add((executable_dir / "Scripts").resolve())
+        wrapper_dirs.add((executable_dir.parent / "Scripts").resolve())
+
+    return wrapper_dirs
+
+
 def _find_native_binary() -> Path | None:
     """Search PATH for a native ``revyl`` binary, skipping Python wrappers.
 
-    The pip-installed console script lives next to ``sys.executable``.
+    The pip-installed console script may live next to ``sys.executable`` or in
+    Python's scripts directory.
     Running it via ``subprocess`` would cause infinite recursion, so we
-    skip any candidate in that directory and any file with a script shebang.
+    skip candidates in those directories and any file with a script shebang.
 
     Returns:
         Path to a native revyl binary, or ``None`` if not found.
     """
-    wrapper_dir = Path(sys.executable).resolve().parent
+    wrapper_dirs = _python_wrapper_dirs()
     suffix = ".exe" if sys.platform == "win32" else ""
     for entry in os.environ.get("PATH", "").split(os.pathsep):
         if not entry:
@@ -178,7 +196,7 @@ def _find_native_binary() -> Path | None:
         if not candidate.exists() or not os.access(str(candidate), os.X_OK):
             continue
         resolved = candidate.resolve()
-        if resolved.parent == wrapper_dir:
+        if resolved.parent in wrapper_dirs:
             continue
         try:
             with open(resolved, "rb") as f:

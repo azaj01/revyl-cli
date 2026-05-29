@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
 import tempfile
 import unittest
 import urllib.error
@@ -99,7 +100,7 @@ class BinaryIntegrityTests(unittest.TestCase):
             with (
                 mock.patch.object(binary, "get_platform_info", return_value=("linux", "amd64", "")),
                 mock.patch.object(binary, "get_binary_path", return_value=binary_path),
-                mock.patch("shutil.which", return_value=None),
+                mock.patch.dict(os.environ, {"PATH": ""}),
                 mock.patch("urllib.request.urlopen", side_effect=_build_urlopen(new_payload, checksums)),
             ):
                 resolved = binary.ensure_binary()
@@ -129,16 +130,20 @@ class BinaryIntegrityTests(unittest.TestCase):
     def test_ensure_binary_finds_binary_on_system_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             sdk_path = Path(tmpdir) / "sdk" / "revyl-linux-amd64"
+            system_path = Path(tmpdir) / "bin" / "revyl"
             sdk_path.parent.mkdir(parents=True, exist_ok=True)
+            system_path.parent.mkdir(parents=True, exist_ok=True)
+            system_path.write_bytes(b"system")
+            system_path.chmod(0o755)
 
             with (
                 mock.patch.object(binary, "get_binary_path", return_value=sdk_path),
-                mock.patch("shutil.which", return_value="/opt/homebrew/bin/revyl"),
+                mock.patch.dict(os.environ, {"PATH": str(system_path.parent)}),
                 mock.patch("urllib.request.urlopen") as mocked_urlopen,
             ):
                 resolved = binary.ensure_binary()
 
-            self.assertEqual(resolved, Path("/opt/homebrew/bin/revyl"))
+            self.assertEqual(resolved, system_path.resolve())
             mocked_urlopen.assert_not_called()
 
     def test_ensure_binary_prefers_sdk_managed_over_system_path(self) -> None:
@@ -158,6 +163,34 @@ class BinaryIntegrityTests(unittest.TestCase):
 
             self.assertEqual(resolved, sdk_path)
             which_mock.assert_not_called()
+
+    def test_find_native_binary_skips_windows_pip_scripts_wrapper(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            python_dir = root / "Python312"
+            scripts_dir = python_dir / "Scripts"
+            native_dir = root / "native"
+            scripts_dir.mkdir(parents=True)
+            native_dir.mkdir()
+
+            python_exe = python_dir / "python.exe"
+            wrapper = scripts_dir / "revyl.exe"
+            native = native_dir / "revyl.exe"
+            python_exe.write_bytes(b"")
+            wrapper.write_bytes(b"MZ wrapper")
+            native.write_bytes(b"MZ native")
+            wrapper.chmod(0o755)
+            native.chmod(0o755)
+
+            with (
+                mock.patch.object(binary.sys, "platform", "win32"),
+                mock.patch.object(binary.sys, "executable", str(python_exe)),
+                mock.patch("sysconfig.get_path", return_value=str(scripts_dir)),
+                mock.patch.dict(os.environ, {"PATH": os.pathsep.join([str(scripts_dir), str(native_dir)])}),
+            ):
+                resolved = binary._find_native_binary()
+
+            self.assertEqual(resolved, native.resolve())
 
     def test_fetch_expected_checksum_returns_none_on_http_error(self) -> None:
         def _raise_404(url, *args, **kwargs):
