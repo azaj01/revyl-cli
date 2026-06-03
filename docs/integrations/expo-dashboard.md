@@ -277,7 +277,6 @@ This helps track which builds correspond to which app versions in Revyl.
 
 - [Upload builds manually →](/builds/index)
 - [Create a test →](/test-creation)
-- [Set up GitHub integration →](/integrations/github)
 - [Automate with CI/CD →](/ci-cd/github-actions)
 
 ---
