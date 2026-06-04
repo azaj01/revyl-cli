@@ -251,7 +251,7 @@ func runTestReport(cmd *cobra.Command, args []string) error {
 		displayName = nameOrID
 	}
 
-	reportURL := stringValue(report.ReportURL)
+	reportURL := stringValue(report.ReportUrl)
 	if reportURL == "" {
 		reportURL = fmt.Sprintf("%s/tests/report?taskId=%s", config.GetAppURL(devMode), taskID)
 	}
@@ -341,7 +341,12 @@ func runTestReport(cmd *cobra.Command, args []string) error {
 	}
 
 	// Display steps
-	if includeSteps && len(report.Steps) > 0 {
+	// Steps is a pointer-to-slice on the generated type; deref once.
+	var steps []api.ReportContextStepResponse
+	if report.Steps != nil {
+		steps = *report.Steps
+	}
+	if includeSteps && len(steps) > 0 {
 		ui.Println()
 		separator := ui.DimStyle.Render("  " + strings.Repeat("─", 64))
 		fmt.Println(separator)
@@ -349,7 +354,7 @@ func runTestReport(cmd *cobra.Command, args []string) error {
 
 		// Compute column widths dynamically
 		numWidth := 2
-		for _, s := range report.Steps {
+		for _, s := range steps {
 			w := len(fmt.Sprintf("%d", s.ExecutionOrder))
 			if w > numWidth {
 				numWidth = w
@@ -357,7 +362,7 @@ func runTestReport(cmd *cobra.Command, args []string) error {
 		}
 
 		typeWidth := 12
-		for _, s := range report.Steps {
+		for _, s := range steps {
 			w := len(strings.ToLower(s.StepType))
 			if w > typeWidth {
 				typeWidth = w
@@ -367,7 +372,7 @@ func runTestReport(cmd *cobra.Command, args []string) error {
 		// Description gets remaining space (target ~40 chars)
 		descWidth := 40
 
-		for _, step := range report.Steps {
+		for _, step := range steps {
 			stepType := strings.ToLower(step.StepType)
 			stepStatus := strings.ToLower(stringValue(step.EffectiveStatus))
 			desc := sanitizeDesc(stringValue(step.StepDescription))

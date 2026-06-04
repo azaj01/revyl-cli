@@ -35,6 +35,11 @@ func FetchArtifactBytes(
 	if url == "" {
 		return nil, ErrArtifactNotAvailable
 	}
+	// Never cache a still-growing live object under the finalized key — see
+	// FetchDeviceStateLines. Centralized here so callers can't poison the cache.
+	if IsLiveURL(url) {
+		cacheDir = ""
+	}
 	if cached, ok := readCachedBytes(cacheDir, taskID, cacheFilename); ok {
 		return cached, nil
 	}

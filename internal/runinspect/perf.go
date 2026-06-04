@@ -67,6 +67,19 @@ type PerfCapture struct {
 	AppEvents []PerfAppEvent `json:"app_events,omitempty"`
 }
 
+// ParsePerf decodes hardware-metrics bytes, auto-detecting the format:
+// the finalized object is a single aggregated JSON document (top-level
+// "samples" array + worker-computed "summary"); the in-progress live
+// object is per-sample JSONL. Detection is structural (isAggregated), so
+// the caller need not — and must not — rely on the report's partial flag
+// to choose a parser. Both paths yield the same PerfCapture.
+func ParsePerf(data []byte) (*PerfCapture, error) {
+	if isAggregated(data, "samples") {
+		return ParsePerfCapture(data)
+	}
+	return ParseLivePerf(data)
+}
+
 // ParsePerfCapture decodes the raw JSON blob.
 func ParsePerfCapture(data []byte) (*PerfCapture, error) {
 	trimmed := strings.TrimSpace(string(data))

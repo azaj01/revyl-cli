@@ -1678,7 +1678,7 @@ to attach first.
 	},
 }
 
-func formatSessionReportFallback(r *api.CLIReportContextResponse, sessionID string) string {
+func formatSessionReportFallback(r *api.ReportContextResponse, sessionID string) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Session Report: %s\n", sessionID))
 	if r.SessionStatus != nil {
@@ -1693,32 +1693,32 @@ func formatSessionReportFallback(r *api.CLIReportContextResponse, sessionID stri
 	if r.TotalSteps != nil {
 		b.WriteString(fmt.Sprintf("  Steps:    %d\n", *r.TotalSteps))
 	}
-	if r.VideoURL != nil {
-		b.WriteString(fmt.Sprintf("  Video:    %s\n", *r.VideoURL))
+	if r.VideoUrl != nil {
+		b.WriteString(fmt.Sprintf("  Video:    %s\n", *r.VideoUrl))
 	}
-	if r.ReportURL != nil {
-		b.WriteString(fmt.Sprintf("  Report:   %s\n", *r.ReportURL))
+	if r.ReportUrl != nil {
+		b.WriteString(fmt.Sprintf("  Report:   %s\n", *r.ReportUrl))
 	}
 	return b.String()
 }
 
-func resolveReportArtifact(r *api.CLIReportContextResponse, kind string) (string, string, error) {
+func resolveReportArtifact(r *api.ReportContextResponse, kind string) (string, string, error) {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "perf", "performance", "hardware", "hardware_metrics":
-		if r.HardwareMetricsURL == nil || strings.TrimSpace(*r.HardwareMetricsURL) == "" {
+		if r.HardwareMetricsUrl == nil || strings.TrimSpace(*r.HardwareMetricsUrl) == "" {
 			return "", "", fmt.Errorf("performance artifact not available for this session")
 		}
-		return strings.TrimSpace(*r.HardwareMetricsURL), "hardware_metrics.json.gz", nil
+		return strings.TrimSpace(*r.HardwareMetricsUrl), "hardware_metrics.json.gz", nil
 	case "network", "requests", "network_requests":
-		if r.NetworkRequestsURL == nil || strings.TrimSpace(*r.NetworkRequestsURL) == "" {
+		if r.NetworkRequestsUrl == nil || strings.TrimSpace(*r.NetworkRequestsUrl) == "" {
 			return "", "", fmt.Errorf("network artifact not available for this session")
 		}
-		return strings.TrimSpace(*r.NetworkRequestsURL), "network_requests.json.gz", nil
+		return strings.TrimSpace(*r.NetworkRequestsUrl), "network_requests.json.gz", nil
 	case "trace", "perfetto":
-		if r.PerfettoTraceURL == nil || strings.TrimSpace(*r.PerfettoTraceURL) == "" {
+		if r.PerfettoTraceUrl == nil || strings.TrimSpace(*r.PerfettoTraceUrl) == "" {
 			return "", "", fmt.Errorf("trace artifact not available for this session")
 		}
-		return strings.TrimSpace(*r.PerfettoTraceURL), "perfetto_trace.pb", nil
+		return strings.TrimSpace(*r.PerfettoTraceUrl), "perfetto_trace.pb", nil
 	default:
 		return "", "", fmt.Errorf("unsupported artifact %q (expected perf, network, or trace)", kind)
 	}

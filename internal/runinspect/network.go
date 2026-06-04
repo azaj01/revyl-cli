@@ -51,6 +51,19 @@ type NetworkCapture struct {
 	Summary  NetworkSummary   `json:"summary"`
 }
 
+// ParseNetwork decodes network-capture bytes, auto-detecting the format:
+// the finalized object is a single aggregated JSON document (top-level
+// "requests" array + "summary"); the in-progress live object is
+// per-request JSONL. Detection is structural (isAggregated), so the
+// caller need not — and must not — rely on the report's partial flag to
+// choose a parser. Both paths yield the same NetworkCapture.
+func ParseNetwork(data []byte) (*NetworkCapture, error) {
+	if isAggregated(data, "requests") {
+		return ParseNetworkCapture(data)
+	}
+	return ParseLiveNetwork(data)
+}
+
 // ParseNetworkCapture decodes the raw JSON blob. Returns an empty
 // capture (no error) for whitespace-only input so the CLI can still
 // pretty-print "0 requests" rather than crash.

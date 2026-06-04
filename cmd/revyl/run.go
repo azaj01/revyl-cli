@@ -430,6 +430,7 @@ func runTestExec(cmd *cobra.Command, args []string) error {
 		BuildVersionID: runBuildID,
 		Timeout:        effectiveTimeout,
 		DevMode:        devMode,
+		NoWait:         runNoWait,
 		MonitoringMode: sse.MonitoringModePolling,
 		Latitude:       lat,
 		Longitude:      lng,
@@ -478,6 +479,10 @@ func runTestExec(cmd *cobra.Command, args []string) error {
 
 	// Handle no-wait mode (result will have TaskID but may not be complete)
 	if runNoWait && result.TaskID != "" {
+		if runOutputJSON || runGitHubActions {
+			outputTestResultJSON(result)
+			return nil
+		}
 		ui.PrintSuccess("Test queued successfully")
 		ui.PrintInfo("Task ID: %s", result.TaskID)
 		ui.PrintLink("Report", result.ReportURL)

@@ -2921,6 +2921,7 @@ type DeviceLogsDownloadResponse struct {
 	DownloadUrl   string `json:"download_url"`
 	FileSizeBytes *int   `json:"file_size_bytes"`
 	Filename      string `json:"filename"`
+	Partial       *bool  `json:"partial,omitempty"`
 }
 
 // DeviceMetadata Device metadata captured at runtime for accurate coordinate scaling.
@@ -5815,41 +5816,44 @@ type ReportContextResponse struct {
 	//
 	// This schema is still actively used and stored in the reports.device_metadata
 	// column in the database.
-	DeviceMetadata        *DeviceMetadata              `json:"device_metadata,omitempty"`
-	DeviceModel           *string                      `json:"device_model"`
-	DeviceStateUrl        *string                      `json:"device_state_url"`
-	DurationSeconds       *float32                     `json:"duration_seconds"`
-	EffectiveFailedSteps  *int                         `json:"effective_failed_steps,omitempty"`
-	EffectivePassedSteps  *int                         `json:"effective_passed_steps,omitempty"`
-	EffectivePendingSteps *int                         `json:"effective_pending_steps,omitempty"`
-	EffectiveRunningSteps *int                         `json:"effective_running_steps,omitempty"`
-	EffectiveWarningSteps *int                         `json:"effective_warning_steps,omitempty"`
-	ExecutionId           *string                      `json:"execution_id"`
-	FailedSteps           *int                         `json:"failed_steps,omitempty"`
-	HardwareMetricsUrl    *string                      `json:"hardware_metrics_url"`
-	Id                    string                       `json:"id"`
-	LaunchEnvVarIds       *[]string                    `json:"launch_env_var_ids"`
-	LaunchEnvVarKeys      *[]string                    `json:"launch_env_var_keys"`
-	NetworkRequestsUrl    *string                      `json:"network_requests_url"`
-	OrgId                 string                       `json:"org_id"`
-	OsVersion             *string                      `json:"os_version"`
-	PassedSteps           *int                         `json:"passed_steps,omitempty"`
-	PerfettoTraceUrl      *string                      `json:"perfetto_trace_url"`
-	Platform              *string                      `json:"platform"`
-	ReportUrl             *string                      `json:"report_url"`
-	ScreenHeight          *int                         `json:"screen_height"`
-	ScreenWidth           *int                         `json:"screen_width"`
-	SessionId             *string                      `json:"session_id"`
-	SessionStatus         *string                      `json:"session_status"`
-	StartedAt             *string                      `json:"started_at"`
-	Steps                 *[]ReportContextStepResponse `json:"steps"`
-	Success               *bool                        `json:"success"`
-	SystemPrompt          *string                      `json:"system_prompt"`
-	TestGoalSummary       *string                      `json:"test_goal_summary"`
-	TestId                *string                      `json:"test_id"`
-	TestName              *string                      `json:"test_name"`
-	TestVersionId         *string                      `json:"test_version_id"`
-	TestVersionNumber     *int                         `json:"test_version_number"`
+	DeviceMetadata         *DeviceMetadata              `json:"device_metadata,omitempty"`
+	DeviceModel            *string                      `json:"device_model"`
+	DeviceStatePartial     *bool                        `json:"device_state_partial"`
+	DeviceStateUrl         *string                      `json:"device_state_url"`
+	DurationSeconds        *float32                     `json:"duration_seconds"`
+	EffectiveFailedSteps   *int                         `json:"effective_failed_steps,omitempty"`
+	EffectivePassedSteps   *int                         `json:"effective_passed_steps,omitempty"`
+	EffectivePendingSteps  *int                         `json:"effective_pending_steps,omitempty"`
+	EffectiveRunningSteps  *int                         `json:"effective_running_steps,omitempty"`
+	EffectiveWarningSteps  *int                         `json:"effective_warning_steps,omitempty"`
+	ExecutionId            *string                      `json:"execution_id"`
+	FailedSteps            *int                         `json:"failed_steps,omitempty"`
+	HardwareMetricsPartial *bool                        `json:"hardware_metrics_partial"`
+	HardwareMetricsUrl     *string                      `json:"hardware_metrics_url"`
+	Id                     string                       `json:"id"`
+	LaunchEnvVarIds        *[]string                    `json:"launch_env_var_ids"`
+	LaunchEnvVarKeys       *[]string                    `json:"launch_env_var_keys"`
+	NetworkRequestsPartial *bool                        `json:"network_requests_partial"`
+	NetworkRequestsUrl     *string                      `json:"network_requests_url"`
+	OrgId                  string                       `json:"org_id"`
+	OsVersion              *string                      `json:"os_version"`
+	PassedSteps            *int                         `json:"passed_steps,omitempty"`
+	PerfettoTraceUrl       *string                      `json:"perfetto_trace_url"`
+	Platform               *string                      `json:"platform"`
+	ReportUrl              *string                      `json:"report_url"`
+	ScreenHeight           *int                         `json:"screen_height"`
+	ScreenWidth            *int                         `json:"screen_width"`
+	SessionId              *string                      `json:"session_id"`
+	SessionStatus          *string                      `json:"session_status"`
+	StartedAt              *string                      `json:"started_at"`
+	Steps                  *[]ReportContextStepResponse `json:"steps"`
+	Success                *bool                        `json:"success"`
+	SystemPrompt           *string                      `json:"system_prompt"`
+	TestGoalSummary        *string                      `json:"test_goal_summary"`
+	TestId                 *string                      `json:"test_id"`
+	TestName               *string                      `json:"test_name"`
+	TestVersionId          *string                      `json:"test_version_id"`
+	TestVersionNumber      *int                         `json:"test_version_number"`
 
 	// Tldr TLDR output with structured citations
 	Tldr                *TLDROutput `json:"tldr,omitempty"`
@@ -5896,56 +5900,59 @@ type ReportContextStepResponse struct {
 
 // ReportV3Response Full report with steps and actions.
 type ReportV3Response struct {
-	AppId               *string                   `json:"app_id"`
-	AppName             *string                   `json:"app_name"`
-	BuildVersion        *string                   `json:"build_version"`
-	CompletedAt         *string                   `json:"completed_at"`
-	CreatedAt           *string                   `json:"created_at"`
-	DeviceLogsS3Key     *string                   `json:"device_logs_s3_key"`
-	DeviceMetadata      *map[string]interface{}   `json:"device_metadata"`
-	DeviceModel         *string                   `json:"device_model"`
-	DeviceStateUrl      *string                   `json:"device_state_url"`
-	DurationSeconds     *float32                  `json:"duration_seconds"`
-	ExecutionId         *string                   `json:"execution_id"`
-	ExpectedStates      *[]map[string]interface{} `json:"expected_states"`
-	FailedSteps         *int                      `json:"failed_steps,omitempty"`
-	HardwareMetricsUrl  *string                   `json:"hardware_metrics_url"`
-	Id                  string                    `json:"id"`
-	LaunchEnvVarIds     *[]string                 `json:"launch_env_var_ids"`
-	LaunchEnvVarKeys    *[]string                 `json:"launch_env_var_keys"`
-	NetworkRequestsUrl  *string                   `json:"network_requests_url"`
-	OrgId               string                    `json:"org_id"`
-	OsVersion           *string                   `json:"os_version"`
-	PassedSteps         *int                      `json:"passed_steps,omitempty"`
-	PerfettoTraceUrl    *string                   `json:"perfetto_trace_url"`
-	Platform            *string                   `json:"platform"`
-	ResolvedBuildId     *string                   `json:"resolved_build_id"`
-	RunConfig           *map[string]interface{}   `json:"run_config"`
-	S3Bucket            *string                   `json:"s3_bucket"`
-	ScreenHeight        *int                      `json:"screen_height"`
-	ScreenWidth         *int                      `json:"screen_width"`
-	SessionId           *string                   `json:"session_id"`
-	SessionStatus       *string                   `json:"session_status"`
-	StartedAt           *string                   `json:"started_at"`
-	Steps               *[]map[string]interface{} `json:"steps,omitempty"`
-	Success             *bool                     `json:"success"`
-	SystemPrompt        *string                   `json:"system_prompt"`
-	TestGoalSummary     *string                   `json:"test_goal_summary"`
-	TestId              *string                   `json:"test_id"`
-	TestName            *string                   `json:"test_name"`
-	TestVersionId       *string                   `json:"test_version_id"`
-	TestVersionNumber   *int                      `json:"test_version_number"`
-	Tldr                *map[string]interface{}   `json:"tldr"`
-	TotalSteps          *int                      `json:"total_steps,omitempty"`
-	TotalValidations    *int                      `json:"total_validations,omitempty"`
-	TraceId             *string                   `json:"trace_id"`
-	UpdatedAt           *string                   `json:"updated_at"`
-	ValidationsPassed   *int                      `json:"validations_passed,omitempty"`
-	VideoS3Key          *string                   `json:"video_s3_key"`
-	VideoUrl            *string                   `json:"video_url"`
-	WhepUrl             *string                   `json:"whep_url"`
-	WorkflowExecutionId *string                   `json:"workflow_execution_id"`
-	WorkflowRunId       *string                   `json:"workflow_run_id"`
+	AppId                  *string                   `json:"app_id"`
+	AppName                *string                   `json:"app_name"`
+	BuildVersion           *string                   `json:"build_version"`
+	CompletedAt            *string                   `json:"completed_at"`
+	CreatedAt              *string                   `json:"created_at"`
+	DeviceLogsS3Key        *string                   `json:"device_logs_s3_key"`
+	DeviceMetadata         *map[string]interface{}   `json:"device_metadata"`
+	DeviceModel            *string                   `json:"device_model"`
+	DeviceStatePartial     *bool                     `json:"device_state_partial"`
+	DeviceStateUrl         *string                   `json:"device_state_url"`
+	DurationSeconds        *float32                  `json:"duration_seconds"`
+	ExecutionId            *string                   `json:"execution_id"`
+	ExpectedStates         *[]map[string]interface{} `json:"expected_states"`
+	FailedSteps            *int                      `json:"failed_steps,omitempty"`
+	HardwareMetricsPartial *bool                     `json:"hardware_metrics_partial"`
+	HardwareMetricsUrl     *string                   `json:"hardware_metrics_url"`
+	Id                     string                    `json:"id"`
+	LaunchEnvVarIds        *[]string                 `json:"launch_env_var_ids"`
+	LaunchEnvVarKeys       *[]string                 `json:"launch_env_var_keys"`
+	NetworkRequestsPartial *bool                     `json:"network_requests_partial"`
+	NetworkRequestsUrl     *string                   `json:"network_requests_url"`
+	OrgId                  string                    `json:"org_id"`
+	OsVersion              *string                   `json:"os_version"`
+	PassedSteps            *int                      `json:"passed_steps,omitempty"`
+	PerfettoTraceUrl       *string                   `json:"perfetto_trace_url"`
+	Platform               *string                   `json:"platform"`
+	ResolvedBuildId        *string                   `json:"resolved_build_id"`
+	RunConfig              *map[string]interface{}   `json:"run_config"`
+	S3Bucket               *string                   `json:"s3_bucket"`
+	ScreenHeight           *int                      `json:"screen_height"`
+	ScreenWidth            *int                      `json:"screen_width"`
+	SessionId              *string                   `json:"session_id"`
+	SessionStatus          *string                   `json:"session_status"`
+	StartedAt              *string                   `json:"started_at"`
+	Steps                  *[]map[string]interface{} `json:"steps,omitempty"`
+	Success                *bool                     `json:"success"`
+	SystemPrompt           *string                   `json:"system_prompt"`
+	TestGoalSummary        *string                   `json:"test_goal_summary"`
+	TestId                 *string                   `json:"test_id"`
+	TestName               *string                   `json:"test_name"`
+	TestVersionId          *string                   `json:"test_version_id"`
+	TestVersionNumber      *int                      `json:"test_version_number"`
+	Tldr                   *map[string]interface{}   `json:"tldr"`
+	TotalSteps             *int                      `json:"total_steps,omitempty"`
+	TotalValidations       *int                      `json:"total_validations,omitempty"`
+	TraceId                *string                   `json:"trace_id"`
+	UpdatedAt              *string                   `json:"updated_at"`
+	ValidationsPassed      *int                      `json:"validations_passed,omitempty"`
+	VideoS3Key             *string                   `json:"video_s3_key"`
+	VideoUrl               *string                   `json:"video_url"`
+	WhepUrl                *string                   `json:"whep_url"`
+	WorkflowExecutionId    *string                   `json:"workflow_execution_id"`
+	WorkflowRunId          *string                   `json:"workflow_run_id"`
 }
 
 // ResolveSlackChannelRequest Request to resolve a Slack channel by free-form input.

@@ -2306,19 +2306,19 @@ type GetSessionReportInput struct {
 }
 
 type GetSessionReportOutput struct {
-	Success       bool                       `json:"success"`
-	SessionID     string                     `json:"session_id,omitempty"`
-	ReportURL     string                     `json:"report_url,omitempty"`
-	SessionStatus string                     `json:"session_status,omitempty"`
-	Platform      string                     `json:"platform,omitempty"`
-	DeviceModel   string                     `json:"device_model,omitempty"`
-	TotalSteps    int                        `json:"total_steps"`
-	PassedSteps   int                        `json:"passed_steps"`
-	FailedSteps   int                        `json:"failed_steps"`
-	VideoURL      string                     `json:"video_url,omitempty"`
-	Steps         []api.CLIReportContextStep `json:"steps,omitempty"`
-	Error         string                     `json:"error,omitempty"`
-	NextSteps     []NextStep                 `json:"next_steps,omitempty"`
+	Success       bool                            `json:"success"`
+	SessionID     string                          `json:"session_id,omitempty"`
+	ReportURL     string                          `json:"report_url,omitempty"`
+	SessionStatus string                          `json:"session_status,omitempty"`
+	Platform      string                          `json:"platform,omitempty"`
+	DeviceModel   string                          `json:"device_model,omitempty"`
+	TotalSteps    int                             `json:"total_steps"`
+	PassedSteps   int                             `json:"passed_steps"`
+	FailedSteps   int                             `json:"failed_steps"`
+	VideoURL      string                          `json:"video_url,omitempty"`
+	Steps         []api.ReportContextStepResponse `json:"steps,omitempty"`
+	Error         string                          `json:"error,omitempty"`
+	NextSteps     []NextStep                      `json:"next_steps,omitempty"`
 }
 
 func (s *Server) handleGetSessionReport(ctx context.Context, req *mcp.CallToolRequest, input GetSessionReportInput) (*mcp.CallToolResult, GetSessionReportOutput, error) {
@@ -2347,8 +2347,8 @@ func (s *Server) handleGetSessionReport(ctx context.Context, req *mcp.CallToolRe
 		Success:   true,
 		SessionID: session.SessionID,
 	}
-	if r.ReportURL != nil {
-		out.ReportURL = *r.ReportURL
+	if r.ReportUrl != nil {
+		out.ReportURL = *r.ReportUrl
 	}
 	if r.SessionStatus != nil {
 		out.SessionStatus = *r.SessionStatus
@@ -2368,10 +2368,12 @@ func (s *Server) handleGetSessionReport(ctx context.Context, req *mcp.CallToolRe
 	if r.FailedSteps != nil {
 		out.FailedSteps = *r.FailedSteps
 	}
-	if r.VideoURL != nil {
-		out.VideoURL = *r.VideoURL
+	if r.VideoUrl != nil {
+		out.VideoURL = *r.VideoUrl
 	}
-	out.Steps = r.Steps
+	if r.Steps != nil {
+		out.Steps = *r.Steps
+	}
 	return nil, out, nil
 }
 

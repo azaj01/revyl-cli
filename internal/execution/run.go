@@ -45,6 +45,10 @@ type RunTestParams struct {
 	// OnTaskStarted is called immediately after the test execution is started.
 	// This provides the task ID early, enabling cancellation before monitoring completes.
 	OnTaskStarted func(taskID string)
+	// NoWait dispatches the run and returns as soon as the task is queued,
+	// skipping the completion monitor. The result carries the TaskID +
+	// ReportURL with Status "queued".
+	NoWait bool
 	// LaunchURL is the deep link URL for hot reload mode.
 	// When provided, the test will launch the app via this URL instead of the normal app launch.
 	LaunchURL string
@@ -165,6 +169,17 @@ func RunTest(ctx context.Context, apiKey string, cfg *config.ProjectConfig, para
 	// Notify caller of task ID immediately for cancellation support
 	if params.OnTaskStarted != nil {
 		params.OnTaskStarted(resp.TaskID)
+	}
+
+	// No-wait: the run is dispatched; return without monitoring to completion.
+	if params.NoWait {
+		reportURL := fmt.Sprintf("%s/tests/report?taskId=%s", config.GetAppURL(params.DevMode), url.QueryEscape(resp.TaskID))
+		return &RunTestResult{
+			TaskID:    resp.TaskID,
+			TestID:    testID,
+			Status:    "queued",
+			ReportURL: reportURL,
+		}, nil
 	}
 
 	// Monitor execution

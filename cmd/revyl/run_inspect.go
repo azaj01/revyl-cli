@@ -26,12 +26,14 @@ import (
 
 var runCmd = &cobra.Command{
 	Use:   "run [task_id]",
-	Short: "Inspect finished test runs (summary, state, logs, network, perf, trace)",
-	Long: `Inspect a completed test run by its task_id.
+	Short: "Inspect a test run (summary, state, logs, network, perf, trace)",
+	Long: `Inspect a test run by its task_id.
 
-Unlike 'revyl device state' (which targets a live dev-loop session),
-'revyl run' operates against the recorded artifacts that were uploaded
-to S3 when the run finished — no active worker required.
+'revyl run {logs,network,perf,state}' work whether the run is still
+executing or already finished: while it runs they read the in-progress
+capture the worker ships to S3 per step (labelled partial); once it
+finishes they read the finalized artifacts. (summary and trace are
+post-run only.)
 
 Bare 'revyl run <task_id>' is shorthand for 'revyl run summary <task_id>'.`,
 	Args: cobra.MaximumNArgs(1),
@@ -88,12 +90,49 @@ var runStateCmd = &cobra.Command{
 
 func runStateRun(cmd *cobra.Command, args []string) error {
 	taskID := args[0]
-	if download, _ := cmd.Flags().GetBool("download"); download {
-		return runStateDownload(cmd, taskID)
-	}
-	report, lines, err := loadRunArtifacts(cmd.Context(), cmd, taskID)
+	report, client, err := loadReportOnly(cmd.Context(), cmd, taskID)
 	if err != nil {
 		return err
+	}
+	// Liveness is advisory — it only frames messaging ("not yet available"
+	// while running vs "not available" on a finished run). A failed session
+	// lookup (deleted/expired session, transient error) must not block reading
+	// artifacts whose presigned URLs are already in the report, so this is
+	// best-effort: on error we fall back to the not-live zero value.
+	live, _ := runinspect.ResolveRunLiveness(cmd.Context(), client, report)
+	partial := report.DeviceStatePartial
+	download, _ := cmd.Flags().GetBool("download")
+
+	if report.DeviceStateURL == "" {
+		if live.Live {
+			return liveNotYetAvailable("device state", taskID)
+		}
+		return fmt.Errorf("no device state captured for this run")
+	}
+	if download {
+		if isLiveURL(report.DeviceStateURL) {
+			return errLiveDownload
+		}
+		return runStateDownload(cmd, taskID)
+	}
+
+	// The live (in-progress) and finalized device_state objects share the
+	// JSONL format, so the same fetch+parse path serves both — including
+	// the per-step --path / --at-step views, which read the records
+	// accumulated so far. Bypass the on-disk cache for a still-growing
+	// live object so a later finished-run read isn't served a stale copy.
+	cacheDir := runinspect.DefaultCacheDir()
+	if isLiveURL(report.DeviceStateURL) {
+		cacheDir = ""
+	}
+	lines, err := runinspect.FetchDeviceStateLines(
+		cmd.Context(), report, http.DefaultClient, cacheDir,
+	)
+	if err != nil {
+		if errors.Is(err, runinspect.ErrNoDeviceStateArtifact) {
+			return fmt.Errorf("no device state captured for this run")
+		}
+		return fmt.Errorf("fetch device-state artifact: %w", err)
 	}
 	path, _ := cmd.Flags().GetString("path")
 	atStep, _ := cmd.Flags().GetInt("at-step")
@@ -108,7 +147,11 @@ func runStateRun(cmd *cobra.Command, args []string) error {
 			return enc.Encode(map[string]any{
 				"task_id": taskID,
 				"paths":   listing,
+				"partial": partial,
 			})
+		}
+		if partial {
+			printPartialNote(cmd)
 		}
 		return printStateListing(cmd, listing)
 	}
@@ -124,9 +167,47 @@ func runStateRun(cmd *cobra.Command, args []string) error {
 			"task_id":  taskID,
 			"path":     path,
 			"snapshot": snapshot,
+			"partial":  partial,
 		})
 	}
+	if partial {
+		printPartialNote(cmd)
+	}
 	return printStateSnapshot(cmd, path, snapshot)
+}
+
+// errLiveDownload is returned when --download is used against a run that
+// is still executing: the raw .gz artifacts are only created when the run
+// uploads them at the end, so there is nothing to download yet.
+var errLiveDownload = fmt.Errorf("--download fetches the recorded artifact, which isn't available until the run completes")
+
+// liveNotYetAvailable explains why an artifact can't be read yet for a
+// run that is still executing: the per-step shipper uploads capture
+// incrementally, so the object may not have landed for the first time
+// yet. Retrying shortly (or after completion) resolves it.
+func liveNotYetAvailable(kind, taskID string) error {
+	return fmt.Errorf(
+		"%s isn't available yet for this run — capture is uploaded incrementally while the run executes. Retry in a moment, or once the run finishes (task %s)",
+		kind, taskID,
+	)
+}
+
+// partialNote labels output sourced from an in-progress live object
+// rather than the finalized end-of-run artifact.
+const partialNote = "(partial — run still in progress; finalized data available after completion)"
+
+func printPartialNote(cmd *cobra.Command) {
+	fmt.Fprintln(cmd.OutOrStdout(), partialNote)
+}
+
+// isLiveURL reports whether a presigned artifact URL points at an
+// in-progress {session_id}/live/ object. The cache bypass and the
+// --download refusal key on this rather than the report's partial flag:
+// the URL path is ground truth, so a stale or wrong flag can never cause
+// a still-growing object to be cached under the finalized key (the
+// poisoning that bit us once) or handed to --download.
+func isLiveURL(url string) bool {
+	return runinspect.IsLiveURL(url)
 }
 
 // runStateDownload streams the raw device_state.jsonl.gz artifact to
@@ -163,7 +244,7 @@ func runStateDownload(cmd *cobra.Command, taskID string) error {
 
 var runLogsCmd = &cobra.Command{
 	Use:   "logs <task_id>",
-	Short: "Show captured device logs (iOS os_log / Android logcat) for a finished run",
+	Short: "Show captured device logs (iOS os_log / Android logcat) for a run (live or finished)",
 	Args:  cobra.ExactArgs(1),
 	Example: `  revyl run logs 7aa6ce3c-...
   revyl run logs 7aa6ce3c-... --grep segment
@@ -178,16 +259,36 @@ func runLogsRun(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// Liveness is advisory — it only frames messaging ("not yet available"
+	// while running vs "not available" on a finished run). A failed session
+	// lookup (deleted/expired session, transient error) must not block reading
+	// artifacts whose presigned URLs are already in the report, so this is
+	// best-effort: on error we fall back to the not-live zero value.
+	live, _ := runinspect.ResolveRunLiveness(cmd.Context(), client, report)
+	download, _ := cmd.Flags().GetBool("download")
+
+	// The device-logs endpoint resolves the finalized object when present
+	// and otherwise falls back to the in-progress {session_id}/live/
+	// object, flagging the response partial. Logs share their text format
+	// both ways, so the parser is identical — only caching and --download
+	// (post-run only) and the partial note differ.
 	logsResp, err := runinspect.ResolveDeviceLogsURL(cmd.Context(), client, report.ReportID)
 	if err != nil {
 		if errors.Is(err, runinspect.ErrArtifactNotAvailable) {
+			if live.Live {
+				return liveNotYetAvailable("device logs", taskID)
+			}
 			return fmt.Errorf("no device logs uploaded for this run")
 		}
 		return err
 	}
+	partial := logsResp.Partial != nil && *logsResp.Partial
+	fromLive := isLiveURL(logsResp.DownloadUrl)
 
-	download, _ := cmd.Flags().GetBool("download")
 	if download {
+		if fromLive {
+			return errLiveDownload
+		}
 		outPath, _ := cmd.Flags().GetString("output")
 		if outPath == "" {
 			outPath = logsResp.Filename
@@ -209,11 +310,14 @@ func runLogsRun(cmd *cobra.Command, args []string) error {
 		}, fmt.Sprintf("Downloaded device logs to %s (%d bytes)", outPath, written))
 		return nil
 	}
-
+	// Bypass the on-disk cache for a still-growing live object.
+	cacheDir := runinspect.DefaultCacheDir()
+	if fromLive {
+		cacheDir = ""
+	}
 	raw, err := runinspect.FetchArtifactBytes(
 		cmd.Context(), logsResp.DownloadUrl, http.DefaultClient,
-		runinspect.DefaultCacheDir(), taskID, "device_logs.txt",
-		logsResp.Compressed,
+		cacheDir, taskID, "device_logs.txt", logsResp.Compressed,
 	)
 	if err != nil {
 		return err
@@ -244,7 +348,11 @@ func runLogsRun(cmd *cobra.Command, args []string) error {
 			"lines":   filtered,
 			"total":   len(lines),
 			"matched": len(filtered),
+			"partial": partial,
 		})
+	}
+	if partial {
+		printPartialNote(cmd)
 	}
 	return printLogLines(cmd, filtered, len(lines))
 }
@@ -272,7 +380,7 @@ func printLogLines(cmd *cobra.Command, filtered []runinspect.LogLine, total int)
 
 var runNetworkCmd = &cobra.Command{
 	Use:   "network <task_id>",
-	Short: "Show captured HTTP traffic for a finished run",
+	Short: "Show captured HTTP traffic for a run (iOS only; live or finished)",
 	Args:  cobra.ExactArgs(1),
 	Example: `  revyl run network 7aa6ce3c-...                          # host rollup
   revyl run network 7aa6ce3c-... --host segment
@@ -284,16 +392,34 @@ var runNetworkCmd = &cobra.Command{
 
 func runNetworkRun(cmd *cobra.Command, args []string) error {
 	taskID := args[0]
-	report, _, err := loadReportOnly(cmd.Context(), cmd, taskID)
+	report, client, err := loadReportOnly(cmd.Context(), cmd, taskID)
 	if err != nil {
 		return err
 	}
+	// Liveness is advisory — it only frames messaging ("not yet available"
+	// while running vs "not available" on a finished run). A failed session
+	// lookup (deleted/expired session, transient error) must not block reading
+	// artifacts whose presigned URLs are already in the report, so this is
+	// best-effort: on error we fall back to the not-live zero value.
+	live, _ := runinspect.ResolveRunLiveness(cmd.Context(), client, report)
+	download, _ := cmd.Flags().GetBool("download")
+	partial := report.NetworkRequestsPartial
+
 	if report.NetworkRequestsURL == "" {
+		// Network capture is iOS-only, so the shipper produces no live
+		// object and finalize uploads none on Android.
+		if strings.EqualFold(report.Platform, "android") || live.Platform == "android" {
+			return fmt.Errorf("HTTP traffic capture is not available on Android (iOS only)")
+		}
+		if live.Live {
+			return liveNotYetAvailable("network capture", taskID)
+		}
 		return fmt.Errorf("no network capture uploaded for this run")
 	}
-
-	download, _ := cmd.Flags().GetBool("download")
 	if download {
+		if isLiveURL(report.NetworkRequestsURL) {
+			return errLiveDownload
+		}
 		outPath, _ := cmd.Flags().GetString("output")
 		if outPath == "" {
 			outPath = "network_requests.json.gz"
@@ -312,16 +438,21 @@ func runNetworkRun(cmd *cobra.Command, args []string) error {
 		}, fmt.Sprintf("Downloaded network capture to %s (%d bytes)", outPath, written))
 		return nil
 	}
-
+	// Bypass the on-disk cache for a still-growing live object.
+	cacheDir := runinspect.DefaultCacheDir()
+	if isLiveURL(report.NetworkRequestsURL) {
+		cacheDir = ""
+	}
 	raw, err := runinspect.FetchArtifactBytes(
 		cmd.Context(), report.NetworkRequestsURL, http.DefaultClient,
-		runinspect.DefaultCacheDir(), taskID, "network_requests.json",
-		true,
+		cacheDir, taskID, "network_requests.json", true,
 	)
 	if err != nil {
 		return err
 	}
-	cap, err := runinspect.ParseNetworkCapture(raw)
+	// Auto-detect aggregated-JSON (finalized) vs per-request JSONL (live)
+	// from the bytes — no dependence on the partial flag.
+	cap, err := runinspect.ParseNetwork(raw)
 	if err != nil {
 		return err
 	}
@@ -368,9 +499,13 @@ func runNetworkRun(cmd *cobra.Command, args []string) error {
 			"summary":  cap.Summary,
 			"matched":  len(filtered),
 			"total":    len(cap.Requests),
+			"partial":  partial,
 		})
 	}
 
+	if partial {
+		printPartialNote(cmd)
+	}
 	noFilters := len(filter.HostGlobs) == 0 && len(filter.Statuses) == 0 &&
 		!filter.FailedOnly && filter.Grep == nil &&
 		filter.SinceSeconds == nil && filter.UntilSeconds == nil
@@ -469,7 +604,7 @@ func formatBytes(n int64) string {
 
 var runPerfCmd = &cobra.Command{
 	Use:   "perf <task_id>",
-	Short: "Show hardware-metrics summary (CPU, memory) for a finished run",
+	Short: "Show hardware-metrics summary (CPU, memory) for a run (live or finished)",
 	Args:  cobra.ExactArgs(1),
 	Example: `  revyl run perf 7aa6ce3c-...
   revyl run perf 7aa6ce3c-... --metric cpu --json
@@ -479,16 +614,29 @@ var runPerfCmd = &cobra.Command{
 
 func runPerfRun(cmd *cobra.Command, args []string) error {
 	taskID := args[0]
-	report, _, err := loadReportOnly(cmd.Context(), cmd, taskID)
+	report, client, err := loadReportOnly(cmd.Context(), cmd, taskID)
 	if err != nil {
 		return err
 	}
+	// Liveness is advisory — it only frames messaging ("not yet available"
+	// while running vs "not available" on a finished run). A failed session
+	// lookup (deleted/expired session, transient error) must not block reading
+	// artifacts whose presigned URLs are already in the report, so this is
+	// best-effort: on error we fall back to the not-live zero value.
+	live, _ := runinspect.ResolveRunLiveness(cmd.Context(), client, report)
+	download, _ := cmd.Flags().GetBool("download")
+	partial := report.HardwareMetricsPartial
+
 	if report.HardwareMetricsURL == "" {
+		if live.Live {
+			return liveNotYetAvailable("hardware metrics", taskID)
+		}
 		return fmt.Errorf("no hardware metrics uploaded for this run")
 	}
-
-	download, _ := cmd.Flags().GetBool("download")
 	if download {
+		if isLiveURL(report.HardwareMetricsURL) {
+			return errLiveDownload
+		}
 		outPath, _ := cmd.Flags().GetString("output")
 		if outPath == "" {
 			outPath = "hardware_metrics.json.gz"
@@ -507,16 +655,21 @@ func runPerfRun(cmd *cobra.Command, args []string) error {
 		}, fmt.Sprintf("Downloaded hardware metrics to %s (%d bytes)", outPath, written))
 		return nil
 	}
-
+	// Bypass the on-disk cache for a still-growing live object.
+	cacheDir := runinspect.DefaultCacheDir()
+	if isLiveURL(report.HardwareMetricsURL) {
+		cacheDir = ""
+	}
 	raw, err := runinspect.FetchArtifactBytes(
 		cmd.Context(), report.HardwareMetricsURL, http.DefaultClient,
-		runinspect.DefaultCacheDir(), taskID, "hardware_metrics.json",
-		true,
+		cacheDir, taskID, "hardware_metrics.json", true,
 	)
 	if err != nil {
 		return err
 	}
-	cap, err := runinspect.ParsePerfCapture(raw)
+	// Auto-detect aggregated-JSON (finalized) vs per-sample JSONL (live)
+	// from the bytes — no dependence on the partial flag.
+	cap, err := runinspect.ParsePerf(raw)
 	if err != nil {
 		return err
 	}
@@ -526,6 +679,7 @@ func runPerfRun(cmd *cobra.Command, args []string) error {
 		out := map[string]any{
 			"task_id": taskID,
 			"summary": cap.Summary,
+			"partial": partial,
 		}
 		if cpuOK {
 			out["cpu"] = cpu
@@ -536,6 +690,9 @@ func runPerfRun(cmd *cobra.Command, args []string) error {
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
 		return enc.Encode(out)
+	}
+	if partial {
+		printPartialNote(cmd)
 	}
 	metric, _ := cmd.Flags().GetString("metric")
 	return printPerfStats(cmd, cap, cpu, mem, cpuOK, memOK, metric)

@@ -3783,132 +3783,14 @@ func (c *Client) GetTestEnhancedHistory(ctx context.Context, testID string, limi
 
 // --- Report V3 API types ---
 
-// CLIReportTLDRKeyMoment mirrors the typed TLDR key moment payload.
-type CLIReportTLDRKeyMoment struct {
-	StepReference string `json:"step_reference"`
-	Description   string `json:"description"`
-	Importance    string `json:"importance"`
-}
-
-// CLIReportTLDR mirrors the typed TLDR payload returned by reports-v3 context.
-type CLIReportTLDR struct {
-	TestCase    string                   `json:"test_case"`
-	KeyMoments  []CLIReportTLDRKeyMoment `json:"key_moments"`
-	Insights    []string                 `json:"insights"`
-	LlmMetadata map[string]interface{}   `json:"llm_metadata,omitempty"`
-}
-
-// CLIReportContextAction mirrors the backend's high-context action payload.
-type CLIReportContextAction struct {
-	ID                       *string                `json:"id,omitempty"`
-	StepID                   *string                `json:"step_id,omitempty"`
-	ActionIndex              int                    `json:"action_index"`
-	ActionType               *string                `json:"action_type,omitempty"`
-	LlmCallID                *string                `json:"llm_call_id,omitempty"`
-	ReflectionLlmCallID      *string                `json:"reflection_llm_call_id,omitempty"`
-	AgentDescription         *string                `json:"agent_description,omitempty"`
-	Reasoning                *string                `json:"reasoning,omitempty"`
-	ReflectionDecision       *string                `json:"reflection_decision,omitempty"`
-	ReflectionReasoning      *string                `json:"reflection_reasoning,omitempty"`
-	ReflectionSuggestion     *string                `json:"reflection_suggestion,omitempty"`
-	IsTerminal               bool                   `json:"is_terminal,omitempty"`
-	ScreenshotBeforeURL      *string                `json:"screenshot_before_url,omitempty"`
-	ScreenshotBeforeCleanURL *string                `json:"screenshot_before_clean_url,omitempty"`
-	ScreenshotAfterURL       *string                `json:"screenshot_after_url,omitempty"`
-	VideoTimestampStart      *float64               `json:"video_timestamp_start,omitempty"`
-	VideoTimestampEnd        *float64               `json:"video_timestamp_end,omitempty"`
-	StartedAt                *string                `json:"started_at,omitempty"`
-	CompletedAt              *string                `json:"completed_at,omitempty"`
-	CreatedAt                *string                `json:"created_at,omitempty"`
-	TypeData                 map[string]interface{} `json:"type_data,omitempty"`
-	LlmCall                  map[string]interface{} `json:"llm_call,omitempty"`
-	ReflectionLlmCall        map[string]interface{} `json:"reflection_llm_call,omitempty"`
-}
-
-// CLIReportContextStep mirrors the backend's high-context step payload.
-type CLIReportContextStep struct {
-	ID                    string                   `json:"id"`
-	ReportID              *string                  `json:"report_id,omitempty"`
-	ParentStepID          *string                  `json:"parent_step_id,omitempty"`
-	ExecutionOrder        int                      `json:"execution_order"`
-	NodeID                *string                  `json:"node_id,omitempty"`
-	StepType              string                   `json:"step_type"`
-	StepDescription       *string                  `json:"step_description,omitempty"`
-	Success               *bool                    `json:"success,omitempty"`
-	ErrorMessage          *string                  `json:"error_message,omitempty"`
-	StartedAt             *string                  `json:"started_at,omitempty"`
-	CompletedAt           *string                  `json:"completed_at,omitempty"`
-	LlmCallID             *string                  `json:"llm_call_id,omitempty"`
-	SourceModuleID        *string                  `json:"source_module_id,omitempty"`
-	SourceModuleName      *string                  `json:"source_module_name,omitempty"`
-	VideoTimestampStart   *float64                 `json:"video_timestamp_start,omitempty"`
-	VideoTimestampEnd     *float64                 `json:"video_timestamp_end,omitempty"`
-	CreatedAt             *string                  `json:"created_at,omitempty"`
-	Status                *string                  `json:"status,omitempty"`
-	StatusReason          *string                  `json:"status_reason,omitempty"`
-	EffectiveStatus       *string                  `json:"effective_status,omitempty"`
-	EffectiveStatusReason *string                  `json:"effective_status_reason,omitempty"`
-	ValidationResult      *bool                    `json:"validation_result,omitempty"`
-	ValidationReasoning   *string                  `json:"validation_reasoning,omitempty"`
-	TypeData              map[string]interface{}   `json:"type_data,omitempty"`
-	Actions               []CLIReportContextAction `json:"actions,omitempty"`
-	LlmCall               map[string]interface{}   `json:"llm_call,omitempty"`
-}
-
-// CLIReportContextResponse mirrors the backend's high-context report payload.
-type CLIReportContextResponse struct {
-	ID                    string                 `json:"id"`
-	ReportURL             *string                `json:"report_url,omitempty"`
-	ExecutionID           *string                `json:"execution_id,omitempty"`
-	SessionID             *string                `json:"session_id,omitempty"`
-	TestID                *string                `json:"test_id,omitempty"`
-	TestVersionID         *string                `json:"test_version_id,omitempty"`
-	OrgID                 string                 `json:"org_id"`
-	StartedAt             *string                `json:"started_at,omitempty"`
-	CompletedAt           *string                `json:"completed_at,omitempty"`
-	TotalSteps            *int                   `json:"total_steps,omitempty"`
-	PassedSteps           *int                   `json:"passed_steps,omitempty"`
-	WarningSteps          *int                   `json:"warning_steps,omitempty"`
-	FailedSteps           *int                   `json:"failed_steps,omitempty"`
-	TotalValidations      *int                   `json:"total_validations,omitempty"`
-	ValidationsPassed     *int                   `json:"validations_passed,omitempty"`
-	EffectivePassedSteps  *int                   `json:"effective_passed_steps,omitempty"`
-	EffectiveWarningSteps *int                   `json:"effective_warning_steps,omitempty"`
-	EffectiveFailedSteps  *int                   `json:"effective_failed_steps,omitempty"`
-	EffectiveRunningSteps *int                   `json:"effective_running_steps,omitempty"`
-	EffectivePendingSteps *int                   `json:"effective_pending_steps,omitempty"`
-	TestGoalSummary       *string                `json:"test_goal_summary,omitempty"`
-	Tldr                  *CLIReportTLDR         `json:"tldr,omitempty"`
-	CreatedAt             *string                `json:"created_at,omitempty"`
-	UpdatedAt             *string                `json:"updated_at,omitempty"`
-	TestName              *string                `json:"test_name,omitempty"`
-	Platform              *string                `json:"platform,omitempty"`
-	SessionStatus         *string                `json:"session_status,omitempty"`
-	DeviceModel           *string                `json:"device_model,omitempty"`
-	OsVersion             *string                `json:"os_version,omitempty"`
-	WhepURL               *string                `json:"whep_url,omitempty"`
-	TraceID               *string                `json:"trace_id,omitempty"`
-	DeviceMetadata        *DeviceMetadata        `json:"device_metadata,omitempty"`
-	ScreenWidth           *int                   `json:"screen_width,omitempty"`
-	ScreenHeight          *int                   `json:"screen_height,omitempty"`
-	Success               *bool                  `json:"success,omitempty"`
-	WorkflowExecutionID   *string                `json:"workflow_execution_id,omitempty"`
-	AppName               *string                `json:"app_name,omitempty"`
-	SystemPrompt          *string                `json:"system_prompt,omitempty"`
-	BuildVersion          *string                `json:"build_version,omitempty"`
-	TestVersionNumber     *int                   `json:"test_version_number,omitempty"`
-	VideoURL              *string                `json:"video_url,omitempty"`
-	PerfettoTraceURL      *string                `json:"perfetto_trace_url,omitempty"`
-	HardwareMetricsURL    *string                `json:"hardware_metrics_url,omitempty"`
-	NetworkRequestsURL    *string                `json:"network_requests_url,omitempty"`
-	DeviceStateURL        *string                `json:"device_state_url,omitempty"`
-	Steps                 []CLIReportContextStep `json:"steps,omitempty"`
-}
-
-// CLIReportContextEnvelope preserves both the raw response bytes and the typed report.
+// CLIReportContextEnvelope preserves both the raw response bytes and the
+// typed report. Report is the generated ReportContextResponse — the single
+// source of truth regenerated from the backend OpenAPI, so a backend field
+// can never silently fail to round-trip into the CLI (the drift that hid
+// the live-artifact *_partial bug).
 type CLIReportContextEnvelope struct {
 	Raw    json.RawMessage
-	Report *CLIReportContextResponse
+	Report *ReportContextResponse
 }
 
 // GetReportContextByExecution retrieves the canonical high-context report for an execution.
@@ -3925,7 +3807,7 @@ func (c *Client) GetReportContextByExecution(ctx context.Context, executionID st
 		return nil, err
 	}
 
-	var result CLIReportContextResponse
+	var result ReportContextResponse
 	raw, err := parseResponseWithRaw(resp, &result)
 	if err != nil {
 		return nil, err
@@ -3951,7 +3833,7 @@ func (c *Client) GetReportBySession(ctx context.Context, sessionID string, inclu
 		return nil, err
 	}
 
-	var result CLIReportContextResponse
+	var result ReportContextResponse
 	raw, err := parseResponseWithRaw(resp, &result)
 	if err != nil {
 		return nil, err

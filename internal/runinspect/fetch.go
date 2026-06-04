@@ -19,7 +19,7 @@ import (
 
 // Report is a thin facade over the backend's context-report response —
 // just the fields the run-inspector cares about. Other callers can
-// continue to use the full “api.CLIReportContextResponse“.
+// continue to use the full “api.ReportContextResponse“.
 type Report struct {
 	TaskID             string
 	ReportID           string // backend report row id; required for the dedicated device-logs endpoint
@@ -38,6 +38,14 @@ type Report struct {
 	NetworkRequestsURL string
 	HardwareMetricsURL string
 	PerfettoTraceURL   string
+	// *Partial flags mark a download URL that resolves to an in-progress
+	// {session_id}/live/ object (run still executing) rather than the
+	// finalized end-of-run artifact. The flag tells the reader to use the
+	// live per-record JSONL parser (network/perf) and to label the output
+	// partial; logs/state share their format both ways.
+	DeviceStatePartial     bool
+	NetworkRequestsPartial bool
+	HardwareMetricsPartial bool
 }
 
 // ReportStep is the subset of a context-step record the inspector
@@ -70,9 +78,9 @@ func FetchReport(ctx context.Context, client *api.Client, taskID string) (*Repor
 	src := envelope.Report
 	out := &Report{
 		TaskID:    taskID,
-		ReportID:  src.ID,
-		SessionID: strDeref(src.SessionID),
-		TestID:    strDeref(src.TestID),
+		ReportID:  src.Id,
+		SessionID: strDeref(src.SessionId),
+		TestID:    strDeref(src.TestId),
 		TestName:  strDeref(src.TestName),
 		Platform:  strDeref(src.Platform),
 		StartedAt: strDeref(src.StartedAt),
@@ -87,17 +95,26 @@ func FetchReport(ctx context.Context, client *api.Client, taskID string) (*Repor
 	if src.FailedSteps != nil {
 		out.FailedSteps = *src.FailedSteps
 	}
-	if src.DeviceStateURL != nil {
-		out.DeviceStateURL = *src.DeviceStateURL
+	if src.DeviceStateUrl != nil {
+		out.DeviceStateURL = *src.DeviceStateUrl
 	}
-	if src.NetworkRequestsURL != nil {
-		out.NetworkRequestsURL = *src.NetworkRequestsURL
+	if src.NetworkRequestsUrl != nil {
+		out.NetworkRequestsURL = *src.NetworkRequestsUrl
 	}
-	if src.HardwareMetricsURL != nil {
-		out.HardwareMetricsURL = *src.HardwareMetricsURL
+	if src.HardwareMetricsUrl != nil {
+		out.HardwareMetricsURL = *src.HardwareMetricsUrl
 	}
-	if src.PerfettoTraceURL != nil {
-		out.PerfettoTraceURL = *src.PerfettoTraceURL
+	if src.PerfettoTraceUrl != nil {
+		out.PerfettoTraceURL = *src.PerfettoTraceUrl
+	}
+	if src.DeviceStatePartial != nil {
+		out.DeviceStatePartial = *src.DeviceStatePartial
+	}
+	if src.NetworkRequestsPartial != nil {
+		out.NetworkRequestsPartial = *src.NetworkRequestsPartial
+	}
+	if src.HardwareMetricsPartial != nil {
+		out.HardwareMetricsPartial = *src.HardwareMetricsPartial
 	}
 	if out.StartedAt != "" && out.CompletedAt != "" {
 		if s, err := time.Parse(time.RFC3339, out.StartedAt); err == nil {
@@ -107,15 +124,17 @@ func FetchReport(ctx context.Context, client *api.Client, taskID string) (*Repor
 			}
 		}
 	}
-	for _, s := range src.Steps {
-		out.Steps = append(out.Steps, ReportStep{
-			StepID:         s.ID,
-			ExecutionOrder: s.ExecutionOrder,
-			StepType:       s.StepType,
-			Description:    strDeref(s.StepDescription),
-			Status:         strDeref(s.EffectiveStatus),
-			StatusReason:   strDeref(s.EffectiveStatusReason),
-		})
+	if src.Steps != nil {
+		for _, s := range *src.Steps {
+			out.Steps = append(out.Steps, ReportStep{
+				StepID:         s.Id,
+				ExecutionOrder: s.ExecutionOrder,
+				StepType:       s.StepType,
+				Description:    strDeref(s.StepDescription),
+				Status:         strDeref(s.EffectiveStatus),
+				StatusReason:   strDeref(s.EffectiveStatusReason),
+			})
+		}
 	}
 	return out, nil
 }
@@ -153,6 +172,13 @@ func FetchDeviceStateLines(
 	}
 	if httpClient == nil {
 		httpClient = http.DefaultClient
+	}
+	// A still-growing live object must never be read from or written to the
+	// taskID-keyed cache, or a later post-run read is served the stale partial
+	// (and a mid-run `revyl run summary` would poison it). Enforce this here so
+	// every caller is safe regardless of the cacheDir it passes.
+	if IsLiveURL(report.DeviceStateURL) {
+		cacheDir = ""
 	}
 
 	if cached, ok := readCachedJSONL(cacheDir, report.TaskID); ok {
